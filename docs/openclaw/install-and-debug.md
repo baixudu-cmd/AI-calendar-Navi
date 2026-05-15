@@ -79,7 +79,7 @@ http://127.0.0.1:37891/calendar-agent/shadow
 ```bash
 OPENCLAW_SHADOW_URL=http://127.0.0.1:37891/calendar-agent/shadow \
 OPENCLAW_SHADOW_SECRET=<same-as-WECHAT_ENTRY_SECRET> \
-OPENCLAW_SHADOW_TEXT="明天下午三点和张总聊 BP" \
+OPENCLAW_SHADOW_TEXT="明天下午三点和小李讨论旅行计划" \
 npm run openclaw:shadow-caller-smoke
 ```
 
@@ -102,7 +102,7 @@ OpenClaw 如果拿到本地媒体路径，可以传媒体字段：
 ```bash
 OPENCLAW_SHADOW_URL=http://127.0.0.1:37891/calendar-agent/shadow \
 OPENCLAW_SHADOW_SECRET=<same-as-WECHAT_ENTRY_SECRET> \
-OPENCLAW_SHADOW_MEDIA_PATH=/tmp/openclaw-weixin/inbound/meeting.png \
+OPENCLAW_SHADOW_MEDIA_PATH=/tmp/openclaw-weixin/inbound/appointment.png \
 OPENCLAW_SHADOW_MEDIA_TYPE=image/png \
 npm run openclaw:shadow-caller-smoke
 ```

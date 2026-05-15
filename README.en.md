@@ -70,7 +70,7 @@ npm run agent:shadow-server
 
 OPENCLAW_SHADOW_URL=http://127.0.0.1:37891/calendar-agent/shadow \
 OPENCLAW_SHADOW_SECRET=<same-as-WECHAT_ENTRY_SECRET> \
-OPENCLAW_SHADOW_TEXT="Schedule a BP discussion tomorrow at 3pm" \
+OPENCLAW_SHADOW_TEXT="Plan a trip tomorrow at 3pm" \
 npm run openclaw:shadow-caller-smoke
 ```
 

@@ -73,7 +73,7 @@ npm run agent:shadow-server
 
 OPENCLAW_SHADOW_URL=http://127.0.0.1:37891/calendar-agent/shadow \
 OPENCLAW_SHADOW_SECRET=<same-as-WECHAT_ENTRY_SECRET> \
-OPENCLAW_SHADOW_TEXT="明天下午三点和张总聊 BP" \
+OPENCLAW_SHADOW_TEXT="明天下午三点和小李讨论旅行计划" \
 npm run openclaw:shadow-caller-smoke
 ```
 
@@ -82,7 +82,7 @@ npm run openclaw:shadow-caller-smoke
 ## 使用示例
 
 ```text
-明天下午三点和张总聊 BP
+明天下午三点和小李讨论旅行计划
 ```
 
 信息完整时，Navi 会直接创建日程。只有真实飞书 API 成功后，才会回复已创建。
@@ -94,7 +94,7 @@ npm run openclaw:shadow-caller-smoke
 如果原文里有明确时间，Navi 会自己总结标题，不再追问“是什么类型”。
 
 ```text
-明天上午 8 点提醒我一下 1011 的 TS
+明天上午 8 点提醒我取体检报告
 ```
 
 这类明确到点提醒会创建对应时间的日程，并在到点时登记微信提醒。
@@ -106,7 +106,7 @@ npm run openclaw:shadow-caller-smoke
 如果待推进收件箱里的事项已经有提醒时间，Navi 会用这条结构化时间创建日程和到点提醒；创建成功后，该事项会从收件箱移除。
 
 ```text
-帮我安排一下拿币这个事
+帮我安排一下整理旅行清单
 ```
 
 没有明确时间时，Navi 会先放进待推进收件箱，或根据当前上下文给出可确认的排程推荐。
