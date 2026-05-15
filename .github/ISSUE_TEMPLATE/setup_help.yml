@@ -1,0 +1,54 @@
+name: Setup help
+description: Get help with local, Feishu or OpenClaw setup
+title: "[Setup]: "
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for install and debugging help. Replace all secrets, calendar IDs, contact IDs and private paths with redacted placeholders.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Setup area
+      options:
+        - Local Node.js install
+        - Model provider
+        - Feishu Calendar
+        - OpenClaw shadow route
+        - WeChat delivery
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands run
+      placeholder: |
+        npm ci
+        npm run live:env-doctor
+        npm run agent:shadow-server
+        npm run openclaw:shadow-caller-smoke
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Redacted output
+      description: Paste redacted command output. Do not include any real key, token or private message.
+      placeholder: |
+        Live env doctor: failed
+        model key: [redacted]
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Redacted environment summary
+      placeholder: |
+        Node.js: v20.x
+        OS: macOS
+        OpenClaw: installed
+        Feishu test calendar: configured

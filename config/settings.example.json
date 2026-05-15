@@ -1,0 +1,24 @@
+{
+  "timezone": "Asia/Shanghai",
+  "reminders": {
+    "wechatLeadMinutes": [40],
+    "proactiveLeadMinutes": 40
+  },
+  "stateFiles": {
+    "seedLite": "state/seed-lite.json",
+    "memoryDream": "state/memory-dream.json",
+    "wechatReminder": "state/wechat-reminders.json"
+  },
+  "briefing": {
+    "morningEnabled": true,
+    "eveningEnabled": true
+  },
+  "scheduling": {
+    "defaultOptionCount": 3,
+    "defaultDurationMinutes": 60
+  },
+  "features": {
+    "memoryDream": true,
+    "imageDraft": false
+  }
+}

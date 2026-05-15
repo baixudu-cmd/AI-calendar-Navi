@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible Navi bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove secrets, private calendar IDs, contact names, and raw message logs before posting.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the user-visible behavior.
+      placeholder: Navi asked an unnecessary question instead of creating a schedule.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: List the smallest steps or command sequence.
+      placeholder: |
+        1. Start `npm run agent:shadow-server`
+        2. Run `npm run openclaw:shadow-caller-smoke`
+        3. Send the redacted input ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Checks already run
+      placeholder: |
+        - npm test
+        - npm run typecheck
+        - npm run live:env-doctor
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Paste only redacted logs. Do not include secrets or real user messages.
+      render: text

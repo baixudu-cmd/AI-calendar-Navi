@@ -1,0 +1,45 @@
+{
+  "name": "navi-calendar",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "acceptance": "vitest run tests/acceptance",
+    "health": "tsx src/index.ts",
+    "live:config": "tsx src/live/cli.ts",
+    "live:env-doctor": "tsx src/live/env-doctor-cli.ts",
+    "live:feishu-smoke": "tsx src/live/feishu-cli.ts",
+    "live:model-smoke": "tsx src/live/model-cli.ts",
+    "live:basic-regression": "tsx src/live/basic-regression-cli.ts",
+    "live:advanced-regression": "tsx src/live/advanced-regression-cli.ts",
+    "live:advanced-feishu-smoke": "tsx src/live/advanced-feishu-cli.ts",
+    "live:advanced-shadow-smoke": "tsx src/live/advanced-shadow-cli.ts",
+    "live:advanced-shadow-feishu-smoke": "tsx src/live/advanced-shadow-feishu-cli.ts",
+    "live:advanced-wechat-bridge-smoke": "tsx src/live/advanced-wechat-bridge-cli.ts",
+    "live:main-calendar-smoke": "tsx src/live/main-calendar-cli.ts",
+    "live:self-use-observation": "tsx src/live/self-use-observation-cli.ts",
+    "live:self-use-runtime-doctor": "tsx src/live/self-use-runtime-doctor-cli.ts",
+    "live:proactive-briefing": "tsx src/live/proactive-briefing-cli.ts",
+    "live:memory-dream": "tsx src/live/memory-dream-cli.ts",
+    "live:proactive-runtime-doctor": "tsx src/live/proactive-runtime-doctor-cli.ts",
+    "live:wechat-reminder-dispatcher": "tsx src/live/wechat-reminder-dispatcher-cli.ts",
+    "live:structured-output-probe": "tsx src/live/structured-output-probe-cli.ts",
+    "live:shadow-message": "tsx src/live/shadow-cli.ts",
+    "test": "vitest run tests",
+    "typecheck": "tsc --noEmit",
+    "agent:api-smoke": "tsx src/agent-api/smoke-cli.ts",
+    "agent:model-smoke": "tsx src/agent-api/model-smoke-cli.ts",
+    "agent:shadow-smoke": "tsx src/agent-api/controlled-shadow-cli.ts",
+    "agent:shadow-server": "tsx src/agent-api/shadow-http-cli.ts",
+    "openclaw:shadow-caller-smoke": "tsx src/openclaw/shadow-caller-cli.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

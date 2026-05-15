@@ -1,0 +1,23 @@
+# 本项目只保存代码和说明，不保存本机密钥、运行状态和日志。
+
+.env
+.env.*
+!.env.example
+config/settings.local.json
+config/*.local.json
+
+node_modules/
+.venv/
+dist/
+build/
+coverage/
+
+logs/
+/state/
+*.log
+
+.DS_Store
+*.local
+
+.worktrees
+.worktrees/
