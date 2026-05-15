@@ -402,35 +402,3 @@ Navi 当前遵循几条硬规则：
 | 混合请求 | `明天上午 10 点开会，下午找时间看材料` |
 | 早报 | `早报` |
 | 晚报 | `晚报` |
-
-## 对外简介
-
-### 一句话版本
-
-Navi 是一个自用优先的微信 AI 日程助手，可以用自然语言创建、查询、修改日程，也能记录待推进事项、推荐排程时间，并把真实结果同步到飞书日历。
-
-### 短版介绍
-
-Navi 是一个面向个人使用的 AI 日程助手。用户可以在微信里直接发送日程需求，比如“明天下午三点和张总聊 BP”“今天有哪些安排”“把第二个改到四点”，Navi 会理解意图、必要时追问，并在确认后调用日历 API 执行。
-
-除了基础日程管理，Navi 也支持待推进事项、排程推荐、早晚报、微信提醒和截图转日程。当前版本以稳定自用为优先，所有创建、修改和删除都以真实日历 API 的执行结果为准。
-
-### GitHub 项目介绍版
-
-Navi is a personal AI calendar assistant built around WeChat and Feishu Calendar. It turns natural-language messages into reliable calendar actions, including event creation, calendar lookup, event updates, delete confirmation, todo inbox management, schedule recommendations, daily briefings, reminders, and image-to-calendar extraction.
-
-The project focuses on a model-first but tool-grounded architecture: the model understands the user's intent and selects a structured tool call, while deterministic APIs handle calendar execution, state updates, reminders, and user-visible replies. A calendar action is only reported as successful after the underlying calendar API succeeds.
-
-### 中文项目介绍版
-
-Navi 是一个基于微信和飞书日历的个人 AI 日程助手。它可以把自然语言消息转成可靠的日历动作，包括创建日程、查询日程、修改日程、删除确认、待推进事项管理、排程推荐、早晚报、提醒和图片转日程。
-
-Navi 的设计重点是稳定自用。模型负责理解用户意图并选择结构化工具调用，真正的日历写入、状态更新和提醒派发由确定性 API 完成。只有日历 API 成功执行后，系统才会向用户回复“已创建”“已修改”或“已删除”。
-
-### 社交平台介绍版
-
-我做了一个自用的 AI 日程助手 Navi。
-
-它不是普通聊天机器人，而是接在微信里的个人日程入口。平时我可以直接发一句“明天下午三点和张总聊 BP”“今天有什么安排”“把第一个安排一下”，它会帮我创建日程、查询日历、管理待推进事项，必要时还会推荐可用时间。
-
-目前 Navi 已经支持日程创建、查询、修改、删除确认、早晚报、微信提醒、待推进收件箱和截图转日程。它的核心原则是：模型负责理解，API 负责执行，真正写进日历才算完成。
