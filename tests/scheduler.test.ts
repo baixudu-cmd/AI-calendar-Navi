@@ -82,6 +82,22 @@ describe("scheduler memory dream bridge", () => {
     });
   });
 
+  it("keeps explicit afternoon windows ahead of morning personal preferences", async () => {
+    const result = await proposeSchedule({
+      calendar: emptyCalendar(),
+      date: "2026-05-14",
+      items: [{ title: "整理材料" }],
+      optionCount: 3,
+      preferences: { preferredStartTimes: ["09:00", "11:00", "14:00"], preferredWindows: ["afternoon"] },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      const startTimes = result.pendingSchedule.options.map((option) => option.items[0]?.startTime);
+      expect(startTimes).toEqual(["14:00", "14:30", "15:00"]);
+    }
+  });
+
   it("treats later as a materially later schedule window", async () => {
     const result = await proposeSchedule({
       calendar: emptyCalendar(),
@@ -116,6 +132,7 @@ describe("scheduler memory dream bridge", () => {
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("因为这段时间没有冲突");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("共 1 个候选");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("确认前不会写入日历");
+      expect(formatScheduleProposalReply(result.pendingSchedule)).not.toContain("\n1. 2026-05-14");
     }
   });
 });

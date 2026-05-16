@@ -127,7 +127,11 @@ export function confirmSchedule(input: ScheduleConfirmationInput): ScheduleConfi
 
 export function formatScheduleProposalReply(pendingSchedule: PendingScheduleState): string {
   const options = pendingSchedule.options.map((option) => {
-    const lines = option.items.map((item) => `${item.itemNumber}. ${item.date} ${item.startTime} ${item.title}`);
+    if (option.items.length === 1) {
+      const item = option.items[0];
+      return `推荐 ${option.optionNumber}：${item.date} ${item.startTime} ${item.title}（因为这段时间没有冲突）`;
+    }
+    const lines = option.items.map((item) => `- 事项 ${item.itemNumber}：${item.date} ${item.startTime} ${item.title}`);
     return `推荐 ${option.optionNumber}：因为这段时间没有冲突。\n${lines.join("\n")}`;
   });
   return `我找到这些可选时间（共 ${pendingSchedule.options.length} 个候选，确认前不会写入日历）：\n${options.join("\n")}\n可以回复“选第几个”，也可以说“第一个改到 11 点”。`;
@@ -196,14 +200,20 @@ function readPreferredStartTime(summary: string): string | null {
 }
 
 function buildStartOffsets(preferences: SchedulePreferences | undefined): number[] {
+  const preferredWindows = preferences?.preferredWindows || [];
+  const allowedStartTimes = preferredWindows.length > 0 ? new Set(preferredWindows.flatMap(preferredWindowToTimes).filter(isWorkdayTime)) : null;
   const windowOffsets = (preferences?.preferredWindows || [])
     .flatMap(preferredWindowToTimes)
     .filter(isWorkdayTime)
     .map((time) => Math.floor((timeToMinutes(time) - WORKDAY_START_MINUTE) / SLOT_STEP_MINUTES));
   const preferredOffsets = (preferences?.preferredStartTimes || [])
     .filter(isWorkdayTime)
+    .filter((time) => !allowedStartTimes || allowedStartTimes.has(time))
     .map((time) => Math.floor((timeToMinutes(time) - WORKDAY_START_MINUTE) / SLOT_STEP_MINUTES));
-  const allOffsets = Array.from({ length: 32 }, (_, index) => index);
+  const allOffsets = Array.from({ length: 32 }, (_, index) => index).filter((offset) => {
+    if (!allowedStartTimes) return true;
+    return allowedStartTimes.has(minutesToTime(WORKDAY_START_MINUTE + offset * SLOT_STEP_MINUTES));
+  });
   return [...new Set([...preferredOffsets, ...windowOffsets, ...allOffsets])];
 }
 

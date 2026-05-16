@@ -1897,6 +1897,62 @@ describe("handleCalendarAgentRequest", () => {
     });
   });
 
+  it("keeps afternoon mixed scheduling away from morning preference slots", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+    const memoryDreamStore = createMemoryMemoryDreamStore({
+      entries: [
+        {
+          id: "mem_preferred_9",
+          kind: "preference_candidate",
+          summary: "排程偏好：优先安排在 09:00",
+          sourceIds: ["obs_9"],
+          confidence: 0.8,
+          status: "stable",
+          reinforcementCount: 2,
+          firstSeenAt: "2026-05-14T01:00:00.000Z",
+          lastSeenAt: "2026-05-15T01:00:00.000Z",
+          updatedAt: "2026-05-15T01:00:00.000Z",
+        },
+        {
+          id: "mem_preferred_11",
+          kind: "preference_candidate",
+          summary: "排程偏好：优先安排在 11:00",
+          sourceIds: ["obs_11"],
+          confidence: 0.8,
+          status: "stable",
+          reinforcementCount: 2,
+          firstSeenAt: "2026-05-14T01:00:00.000Z",
+          lastSeenAt: "2026-05-15T01:00:00.000Z",
+          updatedAt: "2026-05-15T01:00:00.000Z",
+        },
+      ],
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "后天上午10点开会，下午帮我找个时间做一下材料",
+      requestId: "req_mixed_create_schedule_strict_afternoon",
+      now: "2026-05-16T08:50:00+08:00",
+      timezone: "Asia/Shanghai",
+      state,
+      decisionClient: decisionClient({
+        type: "create_and_propose_schedule",
+        events: [{ title: "开会", date: "2026-05-18", startTime: "10:00" }],
+        date: "2026-05-18",
+        preferredWindow: "afternoon",
+        items: [{ title: "做一下材料", durationMinutes: 60 }],
+      }),
+      calendar,
+      memoryDreamStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_and_propose_schedule", requestId: "req_mixed_create_schedule_strict_afternoon" });
+    expect(result.reply).not.toContain("2026-05-18 09:00");
+    expect(result.reply).not.toContain("2026-05-18 11:00");
+    expect(result.reply).not.toContain("\n1. 2026-05-18");
+    expect(state.snapshot().pending_schedule?.options.map((option) => option.items[0]?.startTime)).toEqual(["14:00", "14:30", "15:00"]);
+  });
+
   it("keeps the unfinished schedule proposal when the explicit event conflicts", async () => {
     const state = createShortTermStateStore();
     const calendar = createFakeCalendar();
