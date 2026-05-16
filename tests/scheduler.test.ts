@@ -20,6 +20,19 @@ describe("scheduler memory dream bridge", () => {
     ]);
   });
 
+  it("maps structured dream schedule metadata into proposal item defaults", () => {
+    const entries: MemoryDreamEntry[] = [
+      dreamEntry("mem_1", "schedule_candidate", "排程候选：整理材料", "candidate", 0.72, {
+        targetDate: "2026-05-16",
+        durationMinutes: 90,
+      }),
+    ];
+
+    expect(selectScheduleItemsFromMemoryDream(entries)).toEqual([
+      { title: "整理材料", sourceIds: ["src_1"], date: "2026-05-16", durationMinutes: 90 },
+    ]);
+  });
+
   it("limits dream schedule candidates to five items", () => {
     const entries = Array.from({ length: 8 }, (_, index) =>
       dreamEntry(`mem_${index}`, "schedule_candidate", `排程候选：事项${index}`, "candidate", 0.7),
@@ -39,6 +52,25 @@ describe("scheduler memory dream bridge", () => {
 
     expect(selectSchedulePreferencesFromMemoryDream(entries)).toEqual({
       preferredStartTimes: ["11:00", "15:30"],
+    });
+  });
+
+  it("extracts structured schedule preferences before legacy summary fallback", () => {
+    const entries: MemoryDreamEntry[] = [
+      dreamEntry("mem_1", "preference_candidate", "排程偏好：优先安排在 11:00", "stable", 0.8, {
+        preferredStartTime: "14:00",
+        preferredStartTimes: ["15:00"],
+        preferredWindows: ["afternoon"],
+      }),
+      dreamEntry("mem_2", "schedule_candidate", "排程候选：整理材料", "candidate", 0.7, {
+        preferredStartTime: "16:00",
+        preferredWindows: ["later"],
+      }),
+    ];
+
+    expect(selectSchedulePreferencesFromMemoryDream(entries)).toEqual({
+      preferredStartTimes: ["14:00", "15:00", "16:00", "11:00"],
+      preferredWindows: ["afternoon", "later"],
     });
   });
 
@@ -162,6 +194,7 @@ function dreamEntry(
   summary: string,
   status: MemoryDreamEntry["status"],
   confidence: number,
+  metadata?: unknown,
 ): MemoryDreamEntry {
   return {
     id,
@@ -174,5 +207,6 @@ function dreamEntry(
     firstSeenAt: "2026-05-13T00:00:00.000Z",
     lastSeenAt: "2026-05-13T00:00:00.000Z",
     updatedAt: "2026-05-13T00:00:00.000Z",
-  };
+    ...(metadata ? { metadata } : {}),
+  } as MemoryDreamEntry;
 }

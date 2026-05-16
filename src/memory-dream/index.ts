@@ -13,6 +13,16 @@ export type MemoryDreamEntryKind =
   | "recurring_pattern"
   | "schedule_candidate";
 export type MemoryDreamEntryStatus = "candidate" | "stable" | "stale" | "rejected";
+export type MemoryDreamPreferredWindow = "morning" | "afternoon" | "evening" | "later";
+
+export type MemoryDreamEntryMetadata = {
+  targetDate?: string;
+  preferredStartTime?: string;
+  preferredStartTimes?: string[];
+  preferredWindows?: MemoryDreamPreferredWindow[];
+  durationMinutes?: number;
+  reasonCodes?: string[];
+};
 
 export type MemoryDreamObservation = {
   id?: string;
@@ -41,6 +51,7 @@ export type MemoryDreamEntry = {
   kind: MemoryDreamEntryKind;
   summary: string;
   sourceIds: string[];
+  metadata?: MemoryDreamEntryMetadata;
   confidence: number;
   status: MemoryDreamEntryStatus;
   reinforcementCount: number;
@@ -159,6 +170,7 @@ export async function consolidateMemoryDream(
       kind: "schedule_candidate",
       summary: `排程候选：${item.title}`,
       sourceIds: [item.seedId],
+      metadata: buildSeedScheduleMetadata(item),
       confidence: 0.72,
       status: "candidate",
       reinforcementCount: 1,
@@ -313,6 +325,7 @@ function mergeEntries(existing: MemoryDreamEntry[], candidates: MemoryDreamEntry
     byId.set(candidate.id, {
       ...current,
       sourceIds: uniqueStrings([...current.sourceIds, ...candidate.sourceIds]),
+      metadata: mergeEntryMetadata(current.metadata, candidate.metadata),
       confidence: Math.max(current.confidence, candidate.confidence),
       status: mergeEntryStatus(current.status, candidate.status, reinforcementCount),
       reinforcementCount,
@@ -325,10 +338,13 @@ function mergeEntries(existing: MemoryDreamEntry[], candidates: MemoryDreamEntry
 }
 
 function createEntry(input: Omit<MemoryDreamEntry, "id">): MemoryDreamEntry {
+  const { metadata: rawMetadata, ...entry } = input;
+  const metadata = normalizeEntryMetadata(rawMetadata);
   return {
-    id: `mem_${input.kind}_${stableHash(input.summary)}`,
-    ...input,
-    sourceIds: uniqueStrings(input.sourceIds),
+    id: `mem_${entry.kind}_${stableHash(entry.summary)}`,
+    ...entry,
+    sourceIds: uniqueStrings(entry.sourceIds),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -424,12 +440,14 @@ function normalizeEntry(value: unknown): MemoryDreamEntry | null {
   if (!isRecord(value)) return null;
   const kind = readEntryKind(value.kind);
   const summary = readString(value.summary);
+  const metadata = normalizeEntryMetadata(value.metadata);
   if (!kind || !summary) return null;
   return {
     id: readString(value.id) || `mem_${kind}_${stableHash(summary)}`,
     kind,
     summary,
     sourceIds: Array.isArray(value.sourceIds) ? uniqueStrings(value.sourceIds.filter((item): item is string => typeof item === "string")) : [],
+    ...(metadata ? { metadata } : {}),
     confidence: readNumber(value.confidence) ?? 0.5,
     status: readEntryStatus(value.status) || "candidate",
     reinforcementCount: readNumber(value.reinforcementCount) ?? 1,
@@ -483,6 +501,98 @@ function readEntryKind(value: unknown): MemoryDreamEntryKind | undefined {
 function readEntryStatus(value: unknown): MemoryDreamEntryStatus | undefined {
   if (value === "candidate" || value === "stable" || value === "stale" || value === "rejected") return value;
   return undefined;
+}
+
+function buildSeedScheduleMetadata(item: { targetDate?: string; reminderAt?: string }): MemoryDreamEntryMetadata | undefined {
+  const reminder = readReminderDateTime(item.reminderAt);
+  const targetDate = isValidDateText(item.targetDate) ? item.targetDate : reminder?.date;
+  const preferredStartTime = reminder?.time;
+  const reasonCodes = [
+    targetDate && (item.targetDate === targetDate ? "seed_target_date" : "seed_reminder_date"),
+    preferredStartTime ? "seed_reminder_time" : undefined,
+  ].filter((code): code is string => Boolean(code));
+
+  return normalizeEntryMetadata({
+    ...(targetDate ? { targetDate } : {}),
+    ...(preferredStartTime ? { preferredStartTime, preferredStartTimes: [preferredStartTime] } : {}),
+    ...(reasonCodes.length > 0 ? { reasonCodes } : {}),
+  });
+}
+
+function mergeEntryMetadata(
+  current: MemoryDreamEntryMetadata | undefined,
+  candidate: MemoryDreamEntryMetadata | undefined,
+): MemoryDreamEntryMetadata | undefined {
+  const normalizedCurrent = normalizeEntryMetadata(current);
+  const normalizedCandidate = normalizeEntryMetadata(candidate);
+  if (!normalizedCurrent) return normalizedCandidate;
+  if (!normalizedCandidate) return normalizedCurrent;
+  return normalizeEntryMetadata({
+    ...normalizedCurrent,
+    ...normalizedCandidate,
+    preferredStartTimes: uniqueStrings([
+      ...(normalizedCandidate.preferredStartTimes || []),
+      ...(normalizedCurrent.preferredStartTimes || []),
+    ]),
+    preferredWindows: uniqueWindows([
+      ...(normalizedCandidate.preferredWindows || []),
+      ...(normalizedCurrent.preferredWindows || []),
+    ]),
+    reasonCodes: uniqueReasonCodes([...(normalizedCurrent.reasonCodes || []), ...(normalizedCandidate.reasonCodes || [])]),
+  });
+}
+
+function normalizeEntryMetadata(value: unknown): MemoryDreamEntryMetadata | undefined {
+  if (!isRecord(value)) return undefined;
+  const targetDate = readString(value.targetDate);
+  const preferredStartTime = readString(value.preferredStartTime);
+  const preferredStartTimes = Array.isArray(value.preferredStartTimes)
+    ? value.preferredStartTimes.filter((item): item is string => typeof item === "string" && isValidTimeText(item))
+    : [];
+  const preferredWindows = Array.isArray(value.preferredWindows) ? value.preferredWindows.map(readPreferredWindow).filter((item): item is MemoryDreamPreferredWindow => Boolean(item)) : [];
+  const durationMinutes = readNumber(value.durationMinutes);
+  const reasonCodes = Array.isArray(value.reasonCodes)
+    ? uniqueReasonCodes(value.reasonCodes.filter((item): item is string => typeof item === "string"))
+    : [];
+  const normalizedStartTimes = uniqueStrings([
+    ...(isValidTimeText(preferredStartTime) ? [preferredStartTime] : []),
+    ...preferredStartTimes,
+  ]);
+  const normalized: MemoryDreamEntryMetadata = {
+    ...(isValidDateText(targetDate) ? { targetDate } : {}),
+    ...(normalizedStartTimes[0] ? { preferredStartTime: normalizedStartTimes[0], preferredStartTimes: normalizedStartTimes } : {}),
+    ...(preferredWindows.length > 0 ? { preferredWindows: uniqueWindows(preferredWindows) } : {}),
+    ...(isValidDurationMinutes(durationMinutes) ? { durationMinutes } : {}),
+    ...(reasonCodes.length > 0 ? { reasonCodes } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function readReminderDateTime(value: string | undefined): { date: string; time: string } | undefined {
+  const normalized = value?.trim().replace("T", " ");
+  if (!normalized) return undefined;
+  const [date, timeWithZone] = normalized.split(" ");
+  const time = timeWithZone?.slice(0, 5);
+  if (!isValidDateText(date) || !isValidTimeText(time)) return undefined;
+  return { date, time };
+}
+
+function readPreferredWindow(value: unknown): MemoryDreamPreferredWindow | undefined {
+  if (value === "morning" || value === "afternoon" || value === "evening" || value === "later") return value;
+  return undefined;
+}
+
+function uniqueWindows(values: MemoryDreamPreferredWindow[]): MemoryDreamPreferredWindow[] {
+  return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function uniqueReasonCodes(values: string[]): string[] {
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed && !result.includes(trimmed)) result.push(trimmed);
+  }
+  return result;
 }
 
 function isWithinWindow(value: string, since: string, now: string): boolean {
@@ -550,6 +660,21 @@ function isValidTimeText(value: string | undefined): value is string {
   const hour = Number(match[1]);
   const minute = Number(match[2]);
   return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+}
+
+function isValidDateText(value: string | undefined): value is string {
+  if (!value) return false;
+  const [yearText, monthText, dayText] = value.split("-");
+  if (!yearText || !monthText || !dayText || yearText.length !== 4 || monthText.length !== 2 || dayText.length !== 2) return false;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function isValidDurationMinutes(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 15 && value <= 240;
 }
 
 function uniqueStrings(values: string[]): string[] {

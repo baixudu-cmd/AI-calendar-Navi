@@ -2135,6 +2135,96 @@ describe("handleCalendarAgentRequest", () => {
     });
   });
 
+  it("uses structured memory schedule date and time when arranging remembered todos", async () => {
+    const state = createShortTermStateStore();
+    const memoryDreamStore = createMemoryMemoryDreamStore({
+      entries: [
+        {
+          id: "mem_schedule_material",
+          kind: "schedule_candidate",
+          summary: "排程候选：整理材料",
+          sourceIds: ["seed_1"],
+          confidence: 0.86,
+          status: "stable",
+          reinforcementCount: 1,
+          firstSeenAt: "2026-05-12T01:00:00.000Z",
+          lastSeenAt: "2026-05-13T01:00:00.000Z",
+          updatedAt: "2026-05-13T01:00:00.000Z",
+          metadata: {
+            targetDate: "2026-05-16",
+            preferredStartTime: "14:00",
+            durationMinutes: 90,
+          },
+        } as never,
+      ],
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "把记着的事安排一下",
+      requestId: "req_propose_schedule_from_memory_metadata",
+      state,
+      decisionClient: decisionClient({
+        type: "propose_schedule",
+        items: [],
+      }),
+      calendar: createFakeCalendar(),
+      memoryDreamStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "propose_schedule", requestId: "req_propose_schedule_from_memory_metadata" });
+    expect(state.snapshot().pending_schedule?.options[0]?.items[0]).toMatchObject({
+      title: "整理材料",
+      date: "2026-05-16",
+      startTime: "14:00",
+      endTime: "15:30",
+      durationMinutes: 90,
+    });
+  });
+
+  it("keeps explicit schedule dates ahead of memory schedule defaults", async () => {
+    const state = createShortTermStateStore();
+    const memoryDreamStore = createMemoryMemoryDreamStore({
+      entries: [
+        {
+          id: "mem_schedule_material",
+          kind: "schedule_candidate",
+          summary: "排程候选：整理材料",
+          sourceIds: ["seed_1"],
+          confidence: 0.86,
+          status: "stable",
+          reinforcementCount: 1,
+          firstSeenAt: "2026-05-12T01:00:00.000Z",
+          lastSeenAt: "2026-05-13T01:00:00.000Z",
+          updatedAt: "2026-05-13T01:00:00.000Z",
+          metadata: {
+            targetDate: "2026-05-16",
+            preferredStartTime: "14:00",
+          },
+        } as never,
+      ],
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "明天把记着的事安排一下",
+      requestId: "req_explicit_date_wins_memory_metadata",
+      state,
+      decisionClient: decisionClient({
+        type: "propose_schedule",
+        date: "2026-05-17",
+        items: [],
+      }),
+      calendar: createFakeCalendar(),
+      memoryDreamStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "propose_schedule", requestId: "req_explicit_date_wins_memory_metadata" });
+    expect(state.snapshot().pending_schedule?.options[0]?.items[0]).toMatchObject({
+      title: "整理材料",
+      date: "2026-05-17",
+      startTime: "14:00",
+    });
+  });
+
   it("uses current pending todos when arranging todos before dream candidates exist", async () => {
     const state = createShortTermStateStore();
     const seedStore = createMemorySeedLiteStore([

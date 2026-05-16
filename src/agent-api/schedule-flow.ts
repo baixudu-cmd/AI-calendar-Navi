@@ -36,10 +36,12 @@ export async function executeScheduleProposal(input: {
   const explicitItems = normalizeExecutableScheduleItems(input.action.items);
   if (!explicitItems.ok) return { ok: false, reply: `没有成功：${explicitItems.message}`, actionType: "propose_schedule" };
   const pendingItems = input.action.contextRef === "pending_schedule" ? scheduleItemsFromPendingSchedule(pendingSchedule) : [];
-  const items = explicitItems.items.length > 0 ? explicitItems.items : pendingItems.length > 0 ? pendingItems : candidateItems.length > 0 ? candidateItems : fallbackItems;
-  if (items.length === 0) return { ok: false, reply: "没有成功：没有可安排的待办候选。", actionType: "propose_schedule" };
-  const date = input.action.date || pendingSchedule?.date || input.defaultDate;
+  const rawItems = explicitItems.items.length > 0 ? explicitItems.items : pendingItems.length > 0 ? pendingItems : candidateItems.length > 0 ? candidateItems : fallbackItems;
+  if (rawItems.length === 0) return { ok: false, reply: "没有成功：没有可安排的待办候选。", actionType: "propose_schedule" };
+  const userControlledDate = input.action.date || pendingSchedule?.date;
+  const date = userControlledDate || readSingleItemDate(rawItems) || input.defaultDate;
   if (!date) return { ok: false, reply: "没有成功：排程需要明确日期。", actionType: "propose_schedule" };
+  const items = userControlledDate ? rawItems.map((item) => ({ ...item, date })) : rawItems;
   const proposal = await proposeSchedule({
     calendar: input.calendar,
     date,
@@ -111,12 +113,17 @@ function mergeSchedulePreferences(input: {
   defaultStartTime: string | undefined;
   pendingSchedule: PendingScheduleState | undefined;
 }): SchedulePreferences {
-  const preferredWindows = input.preferredWindow ? [input.preferredWindow] : [];
+  const preferredWindows = input.preferredWindow ? [input.preferredWindow] : input.preferences?.preferredWindows || [];
   const defaultStartTime = input.preferredWindow ? undefined : input.defaultStartTime;
   return {
-    preferredStartTimes: [input.preferredStartTime, defaultStartTime, ...(input.preferences?.preferredStartTimes || [])].filter((time): time is string => Boolean(time)),
-    preferredWindows: [...preferredWindows, ...(input.preferences?.preferredWindows || [])],
+    preferredStartTimes: [input.preferredStartTime, ...(input.preferences?.preferredStartTimes || []), defaultStartTime].filter((time): time is string => Boolean(time)),
+    preferredWindows,
   };
+}
+
+function readSingleItemDate(items: ScheduleProposalItemInput[]): string | undefined {
+  const dates = [...new Set(items.map((item) => item.date).filter((date): date is string => Boolean(date)))];
+  return dates.length === 1 ? dates[0] : undefined;
 }
 
 async function loadScheduleMemory(memoryDreamStore: MemoryDreamStore | undefined) {

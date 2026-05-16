@@ -110,6 +110,40 @@ describe("memory dream", () => {
     );
   });
 
+  it("keeps todo schedule sense metadata on dream schedule candidates", async () => {
+    const store = createMemoryMemoryDreamStore();
+    const seedStore = createMemorySeedLiteStore([
+      {
+        seedId: "seed_1",
+        title: "整理材料",
+        targetDate: "2026-05-16",
+        reminderAt: "2026-05-16 14:00",
+        createdAt: "2026-05-13T00:00:00.000Z",
+      },
+    ]);
+
+    const result = await consolidateMemoryDream({
+      store,
+      seedStore,
+      now: "2026-05-13T03:20:00.000Z",
+      since: "2026-05-12T03:20:00.000Z",
+    });
+
+    expect(result.entries).toContainEqual(
+      expect.objectContaining({
+        kind: "schedule_candidate",
+        summary: "排程候选：整理材料",
+        sourceIds: ["seed_1"],
+        metadata: {
+          targetDate: "2026-05-16",
+          preferredStartTime: "14:00",
+          preferredStartTimes: ["14:00"],
+          reasonCodes: ["seed_target_date", "seed_reminder_time"],
+        },
+      }),
+    );
+  });
+
   it("consolidates successful recent actions and ignores older observations", async () => {
     const store = createMemoryMemoryDreamStore({
       observations: [
@@ -294,5 +328,46 @@ describe("memory dream", () => {
         reinforcementCount: 1,
       }),
     );
+  });
+
+  it("normalizes malformed entry metadata without dropping old snapshots", async () => {
+    const store = createMemoryMemoryDreamStore({
+      entries: [
+        {
+          id: "mem_schedule",
+          kind: "schedule_candidate",
+          summary: "排程候选：整理材料",
+          sourceIds: ["seed_1"],
+          confidence: 0.8,
+          status: "candidate",
+          reinforcementCount: 1,
+          firstSeenAt: "2026-05-13T00:00:00.000Z",
+          lastSeenAt: "2026-05-13T00:00:00.000Z",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+          metadata: {
+            targetDate: "not-a-date",
+            preferredStartTime: "25:99",
+            preferredStartTimes: ["14:00", "bad"],
+            preferredWindows: ["afternoon", "bad"],
+            durationMinutes: 90,
+            reasonCodes: ["seed_target_date", ""],
+          },
+        } as never,
+      ],
+    });
+
+    await expect(store.load()).resolves.toMatchObject({
+      entries: [
+        expect.objectContaining({
+          summary: "排程候选：整理材料",
+          metadata: expect.objectContaining({
+            preferredStartTimes: ["14:00"],
+            preferredWindows: ["afternoon"],
+            durationMinutes: 90,
+            reasonCodes: ["seed_target_date"],
+          }),
+        }),
+      ],
+    });
   });
 });

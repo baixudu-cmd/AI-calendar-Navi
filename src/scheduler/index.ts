@@ -4,7 +4,7 @@ import type { CalendarAdapter } from "../calendar/action-executor.js";
 import type { FeishuCalendarEvent } from "../calendar/feishu/types.js";
 import type { SchedulePreferredWindow } from "../contract/index.js";
 import type { EventDraft } from "../contract/index.js";
-import type { MemoryDreamEntry } from "../memory-dream/index.js";
+import type { MemoryDreamEntry, MemoryDreamEntryMetadata } from "../memory-dream/index.js";
 import type { PendingScheduleItemState, PendingScheduleState } from "../state/index.js";
 
 export type ScheduleProposalItemInput = {
@@ -156,19 +156,41 @@ export function selectScheduleItemsFromMemoryDream(
     .filter((item): item is { entry: MemoryDreamEntry; title: string } => Boolean(item.title))
     .sort((a, b) => b.entry.confidence - a.entry.confidence || a.title.localeCompare(b.title))
     .slice(0, limit)
-    .map((item) => ({ title: item.title, sourceIds: item.entry.sourceIds }));
+    .map((item) => {
+      const metadata = readScheduleMetadata(item.entry.metadata);
+      return {
+        title: item.title,
+        sourceIds: item.entry.sourceIds,
+        ...(metadata.targetDate ? { date: metadata.targetDate } : {}),
+        ...(metadata.durationMinutes ? { durationMinutes: metadata.durationMinutes } : {}),
+      };
+    });
 }
 
 // 从个人习惯记忆中提取排程偏好；只影响推荐顺序，不创建日程。
 export function selectSchedulePreferencesFromMemoryDream(entries: MemoryDreamEntry[]): SchedulePreferences {
-  const preferredStartTimes = entries
+  const activeEntries = entries
+    .filter((entry) => entry.status === "candidate" || entry.status === "stable");
+  const structuredStartTimes = activeEntries
+    .flatMap((entry) => {
+      const metadata = readScheduleMetadata(entry.metadata);
+      return [metadata.preferredStartTime, ...(metadata.preferredStartTimes || [])];
+    })
+    .filter((time): time is string => Boolean(time))
+    .filter(isWorkdayTime);
+  const legacyStartTimes = activeEntries
     .filter((entry) => entry.kind === "preference_candidate")
-    .filter((entry) => entry.status === "candidate" || entry.status === "stable")
     .map((entry) => readPreferredStartTime(entry.summary))
     .filter((time): time is string => Boolean(time))
     .filter(isWorkdayTime);
+  const preferredWindows = activeEntries
+    .flatMap((entry) => readScheduleMetadata(entry.metadata).preferredWindows || [])
+    .filter((window, index, values) => values.indexOf(window) === index);
 
-  return { preferredStartTimes: [...new Set(preferredStartTimes)] };
+  return {
+    preferredStartTimes: [...new Set([...structuredStartTimes, ...legacyStartTimes])],
+    ...(preferredWindows.length > 0 ? { preferredWindows } : {}),
+  };
 }
 
 type RequiredScheduleProposalItem = ScheduleProposalItemInput & {
@@ -203,6 +225,27 @@ function readPreferredStartTime(summary: string): string | null {
   if (!match) return null;
   const time = `${match[1]}:${match[2]}`;
   return isValidTime(time) ? time : null;
+}
+
+function readScheduleMetadata(value: MemoryDreamEntryMetadata | undefined): MemoryDreamEntryMetadata {
+  if (!value) return {};
+  const preferredStartTimes = [
+    ...(isValidTime(value.preferredStartTime) ? [value.preferredStartTime] : []),
+    ...((value.preferredStartTimes || []).filter(isValidTime)),
+  ].filter(isWorkdayTime);
+  const preferredWindows = (value.preferredWindows || []).filter(isPreferredWindow);
+  return {
+    ...(isValidDate(value.targetDate) ? { targetDate: value.targetDate } : {}),
+    ...(preferredStartTimes[0] ? { preferredStartTime: preferredStartTimes[0], preferredStartTimes: [...new Set(preferredStartTimes)] } : {}),
+    ...(preferredWindows.length > 0 ? { preferredWindows: [...new Set(preferredWindows)] } : {}),
+    ...(typeof value.durationMinutes === "number" && Number.isInteger(value.durationMinutes) && value.durationMinutes >= 15 && value.durationMinutes <= 240
+      ? { durationMinutes: value.durationMinutes }
+      : {}),
+  };
+}
+
+function isPreferredWindow(value: unknown): value is SchedulePreferredWindow {
+  return value === "morning" || value === "afternoon" || value === "evening" || value === "later";
 }
 
 function buildStartOffsets(preferences: SchedulePreferences | undefined): number[] {
