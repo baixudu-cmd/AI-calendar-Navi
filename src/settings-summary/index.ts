@@ -89,7 +89,7 @@ function buildSchedulingSection(settings: AppSettings): string {
     "排程设置",
     `- 排程默认候选：${settings.scheduling.defaultOptionCount} 个`,
     `- 默认事项时长：${settings.scheduling.defaultDurationMinutes} 分钟`,
-    "- 推荐结果确认前不会写入日历；可以说“换下午”“选第二个”“第一个改到 11 点”",
+    "- 推荐结果确认前不会写入日历；可以说“换下午”“选第二个”“取消推荐”",
   ].join("\n");
 }
 

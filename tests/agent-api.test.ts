@@ -199,6 +199,7 @@ describe("handleCalendarAgentRequest", () => {
     expect(result.reply).toContain("MODEL_API_KEY：[set]");
     expect(result.reply).not.toContain("secret-model-key");
     expect(result.reply).toContain("FEISHU_MAIN_CALENDAR_ID：main-calendar-id");
+    expect(result.reply).not.toContain("第一个改到 11 点");
     expect(result.reply).toContain("Mac mini 运行目录的 .env");
     expect(createCalls).toBe(0);
     expect(listCalls).toBe(0);
