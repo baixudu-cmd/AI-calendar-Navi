@@ -310,6 +310,24 @@ describe("validateToolCall", () => {
     });
   });
 
+  it("accepts canonical start time evidence when the source has equivalent spoken times", () => {
+    expect(
+      validateToolCall(
+        {
+          toolName: "calendar.create_events",
+          arguments: {
+            events: [
+              { title: "去牙医", date: "2026-05-18", startTime: "09:00", startTimeEvidence: "09:00" },
+              { title: "取快递", date: "2026-05-18", startTime: "14:00", startTimeEvidence: "14:00" },
+              { title: "健身", date: "2026-05-18", startTime: "19:00", startTimeEvidence: "19:00" },
+            ],
+          },
+        },
+        { sourceText: "后天上午 9 点去牙医，下午 2 点取快递，晚上 7 点健身" },
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
   it("accepts valid batch create and normalizes each event", () => {
     const result = validateToolCall({
       toolName: "calendar.create_events",
@@ -877,6 +895,54 @@ describe("validateToolCall", () => {
     ).toMatchObject({ ok: false, reason: "guard_rejected" });
   });
 
+  it("accepts update with explicit event query target", () => {
+    const result = validateToolCall({
+      toolName: "calendar.update_event",
+      arguments: {
+        target: { kind: "event_query", date: "2026-05-17", timeWindow: "afternoon", title: "健身" },
+        patch: { startTime: "16:00" },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(toolCallToCalendarAction(result.call)).toEqual({
+        type: "update_event",
+        target: { kind: "event_query", date: "2026-05-17", timeWindow: "afternoon", title: "健身" },
+        patch: { startTime: "16:00" },
+      });
+    }
+  });
+
+  it("accepts update and delete with recent displayed event references", () => {
+    const update = validateToolCall({
+      toolName: "calendar.update_event",
+      arguments: { target: { kind: "recent_event_item", itemNumber: 3 }, patch: { startTime: "16:00" } },
+    });
+
+    expect(update).toMatchObject({ ok: true });
+    if (update.ok) {
+      expect(toolCallToCalendarAction(update.call)).toEqual({
+        type: "update_event",
+        target: { kind: "recent_event_item", itemNumber: 3 },
+        patch: { startTime: "16:00" },
+      });
+    }
+
+    const deletion = validateToolCall({
+      toolName: "calendar.delete_event",
+      arguments: { target: { kind: "recent_event_item", itemNumber: 3 } },
+    });
+
+    expect(deletion).toMatchObject({ ok: true });
+    if (deletion.ok) {
+      expect(toolCallToCalendarAction(deletion.call)).toEqual({
+        type: "request_delete_event",
+        target: { kind: "recent_event_item", itemNumber: 3 },
+      });
+    }
+  });
+
   it("rejects delete without an explicit local reference", () => {
     expect(
       validateToolCall({
@@ -899,7 +965,7 @@ describe("validateToolCall", () => {
     });
   });
 
-  it("accepts delete only with last_event or briefing_item reference shape", () => {
+  it("accepts delete with local references or explicit event query shape", () => {
     expect(
       validateToolCall({
         toolName: "calendar.delete_event",
@@ -919,6 +985,48 @@ describe("validateToolCall", () => {
       ok: true,
       call: { toolName: "calendar.delete_event", arguments: { target: { kind: "briefing_item", itemNumber: 2 } } },
     });
+
+    const byQuery = validateToolCall({
+      toolName: "calendar.delete_event",
+      arguments: { target: { kind: "event_query", date: "2026-05-17", startTime: "19:00", title: "健身" } },
+    });
+
+    expect(byQuery).toEqual({
+      ok: true,
+      call: {
+        toolName: "calendar.delete_event",
+        arguments: { target: { kind: "event_query", date: "2026-05-17", startTime: "19:00", title: "健身" } },
+      },
+    });
+    if (byQuery.ok) {
+      expect(toolCallToCalendarAction(byQuery.call)).toEqual({
+        type: "request_delete_event",
+        target: { kind: "event_query", date: "2026-05-17", startTime: "19:00", title: "健身" },
+      });
+    }
+  });
+
+  it("rejects explicit delete query without enough target fields", () => {
+    expect(
+      validateToolCall({
+        toolName: "calendar.delete_event",
+        arguments: { target: { kind: "event_query", date: "2026-05-17" } },
+      }),
+    ).toMatchObject({ ok: false, reason: "guard_rejected" });
+
+    expect(
+      validateToolCall({
+        toolName: "calendar.delete_event",
+        arguments: { target: { kind: "event_query", startTime: "19:00" } },
+      }),
+    ).toMatchObject({ ok: false, reason: "guard_rejected" });
+
+    expect(
+      validateToolCall({
+        toolName: "calendar.delete_event",
+        arguments: { target: { kind: "event_query", title: "健身" } },
+      }),
+    ).toMatchObject({ ok: true });
   });
 
   it("accepts batch delete only by explicit date or date range query", () => {

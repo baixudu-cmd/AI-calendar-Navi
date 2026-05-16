@@ -1738,6 +1738,10 @@ describe("handleCalendarAgentRequest", () => {
         { itemNumber: 1, eventId: "evt_1", title: "投委会", date: "2026-05-12", startTime: "09:00" },
         { itemNumber: 2, eventId: "evt_2", title: "客户电话", date: "2026-05-12", startTime: "14:00" },
       ],
+      recent_event_items: [
+        { itemNumber: 1, eventId: "evt_1", title: "投委会", date: "2026-05-12", startTime: "09:00" },
+        { itemNumber: 2, eventId: "evt_2", title: "客户电话", date: "2026-05-12", startTime: "14:00" },
+      ],
     });
 
     const updateResult = await handleCalendarAgentRequest({
@@ -1760,6 +1764,49 @@ describe("handleCalendarAgentRequest", () => {
         { id: "evt_1", title: "投委会", start: "2026-05-12 09:00" },
         { id: "evt_2", title: "客户电话", start: "2026-05-12 15:00" },
       ],
+    });
+  });
+
+  it("locks the third recently displayed created event for deletion", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+
+    await handleCalendarAgentRequest({
+      text: "明天9点去牙医，下午2点取快递，晚上7点健身",
+      requestId: "req_create_three_recent_events",
+      state,
+      decisionClient: decisionClient({
+        type: "create_events",
+        events: [
+          { title: "去牙医", date: "2026-05-17", startTime: "09:00" },
+          { title: "取快递", date: "2026-05-17", startTime: "14:00" },
+          { title: "健身", date: "2026-05-17", startTime: "19:00" },
+        ],
+      }),
+      calendar,
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "把第三个去掉吧",
+      requestId: "req_delete_third_recent_event",
+      state,
+      decisionClient: decisionClient({
+        type: "request_delete_event",
+        target: { kind: "recent_event_item", itemNumber: 3 },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "request_delete_event", requestId: "req_delete_third_recent_event" });
+    expect(result.reply).toContain("确认删除");
+    expect(result.reply).toContain("健身");
+    expect(state.snapshot().pending_delete).toEqual({
+      eventId: "evt_3",
+      title: "健身",
+      source: "recent_event_item",
+      itemNumber: 3,
+      date: "2026-05-17",
+      startTime: "19:00",
     });
   });
 
@@ -2847,6 +2894,127 @@ describe("handleCalendarAgentRequest", () => {
       itemNumber: 2,
       date: "2026-05-09",
       startTime: "14:00",
+    });
+  });
+
+  it("locks an explicit delete query by date time and title instead of stale numbered context", async () => {
+    const state = createShortTermStateStore({
+      briefing_items: [
+        { itemNumber: 1, eventId: "evt_today_dinner", title: "和朋友吃饭", date: "2026-05-16", startTime: "19:00" },
+      ],
+    });
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "和朋友吃饭", date: "2026-05-16", startTime: "19:00" });
+    await calendar.createEvent({ title: "健身", date: "2026-05-17", startTime: "19:00" });
+
+    const result = await handleCalendarAgentRequest({
+      text: "去掉明天晚上7点的健身",
+      requestId: "req_delete_explicit_query",
+      state,
+      decisionClient: decisionClient({
+        type: "request_delete_event",
+        target: { kind: "event_query", date: "2026-05-17", startTime: "19:00", title: "健身" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "request_delete_event", requestId: "req_delete_explicit_query" });
+    expect(result.reply).toContain("确认删除");
+    expect(result.reply).toContain("健身");
+    expect(result.reply).not.toContain("和朋友吃饭");
+    expect(state.snapshot().pending_delete).toEqual({
+      eventId: "evt_2",
+      title: "健身",
+      source: "event_query",
+      date: "2026-05-17",
+      startTime: "19:00",
+    });
+  });
+
+  it("lists candidates when an explicit delete query matches multiple events", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "健身", date: "2026-05-17", startTime: "19:00" });
+    await calendar.createEvent({ title: "健身课", date: "2026-05-17", startTime: "19:00" });
+
+    const result = await handleCalendarAgentRequest({
+      text: "去掉明天晚上7点的健身",
+      requestId: "req_delete_explicit_query_ambiguous",
+      state,
+      decisionClient: decisionClient({
+        type: "request_delete_event",
+        target: { kind: "event_query", date: "2026-05-17", startTime: "19:00", title: "健身" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "request_delete_event", requestId: "req_delete_explicit_query_ambiguous" });
+    expect(result.reply).toContain("匹配到多个日程");
+    expect(result.reply).toContain("请回复要删除第几个");
+    expect(state.snapshot().pending_delete).toMatchObject({
+      source: "event_query",
+      eventIds: ["evt_1", "evt_2"],
+      requireSelection: true,
+    });
+  });
+
+  it("does not delete all fuzzy query candidates when the user confirms without choosing one", async () => {
+    const state = createShortTermStateStore({
+      pending_delete: {
+        source: "event_query",
+        title: "匹配到的 2 个日程",
+        eventIds: ["evt_1", "evt_2"],
+        requireSelection: true,
+        items: [
+          { eventId: "evt_1", title: "健身", date: "2026-05-17", startTime: "19:00" },
+          { eventId: "evt_2", title: "健身课", date: "2026-05-17", startTime: "19:00" },
+        ],
+      },
+    } as never);
+    let deleteCalls = 0;
+
+    const result = await handleCalendarAgentRequest({
+      text: "确认",
+      requestId: "req_delete_query_requires_selection",
+      state,
+      decisionClient: decisionClient({ type: "confirm_delete", confirmed: true }),
+      calendar: {
+        ...createFakeCalendar(),
+        deleteEvent: async (input) => {
+          deleteCalls += 1;
+          return { ok: true, data: { eventId: input.eventId } };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, actionType: "confirm_delete", requestId: "req_delete_query_requires_selection" });
+    expect(result.reply).toContain("请先回复要删除第几个");
+    expect(deleteCalls).toBe(0);
+    expect(state.snapshot().pending_delete).toBeDefined();
+  });
+
+  it("updates a unique event found by structured query", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "健身", date: "2026-05-17", startTime: "15:00" });
+
+    const result = await handleCalendarAgentRequest({
+      text: "把周日下午的健身改到4点",
+      requestId: "req_update_explicit_query",
+      state,
+      decisionClient: decisionClient({
+        type: "update_event",
+        target: { kind: "event_query", date: "2026-05-17", timeWindow: "afternoon", title: "健身" },
+        patch: { startTime: "16:00" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event", requestId: "req_update_explicit_query" });
+    expect(result.reply).toContain("已修改");
+    await expect(calendar.listEvents({ date: "2026-05-17" })).resolves.toMatchObject({
+      ok: true,
+      data: [{ id: "evt_1", title: "健身", start: "2026-05-17 16:00" }],
     });
   });
 

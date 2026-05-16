@@ -8,7 +8,7 @@ import { normalizeExplicitWeekdayCreateDates } from "../calendar/weekday-guard.j
 import type { ClarifyEventDraftRepairer } from "../clarify-repair/index.js";
 import { deleteEvent, deleteManyEvents } from "../calendar-api/index.js";
 import type { EnvSource } from "../config/index.js";
-import type { CalendarAction, EventQuery } from "../contract/index.js";
+import type { CalendarAction, EventQuery, EventQueryReference } from "../contract/index.js";
 import type { DecisionClient } from "../decision/index.js";
 import { protectIncomingMessage } from "../entry/index.js";
 import type { ImageDraftParser, ImageCalendarDraftParseResult } from "../image-capture/index.js";
@@ -19,7 +19,7 @@ import { buildActionReply } from "../reply/index.js";
 import { buildSettingsSummary } from "../settings-summary/index.js";
 import { buildStatusOverview } from "../status-overview/index.js";
 import { briefingItemStateFromCalendarEvent, lastEventStateFromCalendarEvent } from "../state/calendar-event.js";
-import type { PendingConflictState, PendingDeleteState, ShortTermStateStore } from "../state/index.js";
+import type { BriefingItemState, PendingConflictState, PendingDeleteItemState, PendingDeleteState, ShortTermStateStore } from "../state/index.js";
 import { expirePendingInteractionState } from "../state/lifecycle.js";
 import type { SeedLiteStore } from "../seed-lite/index.js";
 import { buildWechatReminderJobs, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES, normalizeLeadMinutes, type WechatReminderStore } from "../wechat-reminder/index.js";
@@ -194,11 +194,19 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
   }
 
   if (loopResult.action.type === "request_delete_event") {
-    const pendingDelete = resolvePendingDelete(loopResult.action, input.state);
+    const pendingDelete = await resolvePendingDelete(loopResult.action, input.state, input.calendar);
     if (!pendingDelete.ok) {
       return { ok: false, reply: `没有成功：${pendingDelete.message}`, actionType: "request_delete_event", requestId };
     }
     input.state.update({ pending_delete: pendingDelete.pendingDelete });
+    if (pendingDelete.pendingDelete.source === "event_query" && "items" in pendingDelete.pendingDelete) {
+      return {
+        ok: true,
+        reply: `匹配到多个日程：\n${formatPendingDeleteItemsForReply(pendingDelete.pendingDelete.items)}\n请回复要删除第几个；不删可回复取消或算了。`,
+        actionType: "request_delete_event",
+        requestId,
+      };
+    }
     return {
       ok: true,
       reply: `确认删除：${pendingDelete.pendingDelete.title}？要删可以回复 OK 或确认；不删可回复取消或算了。`,
@@ -576,7 +584,7 @@ async function executeCalendarAgentAction(input: {
   sourceText: string;
   input: CalendarAgentRequest;
 }): Promise<CalendarAgentResponse> {
-  const executableAction = resolveExecutableAction(input.action, input.input.state);
+  const executableAction = await resolveExecutableAction(input.action, input.input.state, input.input.calendar);
   if (!executableAction.ok) {
     return { ok: false, reply: `没有成功：${executableAction.message}`, actionType: input.action.type, requestId: input.requestId };
   }
@@ -633,10 +641,11 @@ async function executeCalendarAgentAction(input: {
   };
 }
 
-function resolvePendingDelete(
+async function resolvePendingDelete(
   action: Extract<CalendarAction, { type: "request_delete_event" }>,
   state: ShortTermStateStore,
-): { ok: true; pendingDelete: PendingDeleteState } | { ok: false; message: string } {
+  calendar: CalendarAdapter,
+): Promise<{ ok: true; pendingDelete: PendingDeleteState } | { ok: false; message: string }> {
   const snapshot = state.snapshot();
   const target = action.target;
 
@@ -654,18 +663,56 @@ function resolvePendingDelete(
     };
   }
 
-  const item = snapshot.briefing_items?.find((candidate) => candidate.itemNumber === target.itemNumber);
-  if (!item) return { ok: false, message: `没有找到日报里的第 ${target.itemNumber} 条。` };
+  if (target.kind === "event_query") {
+    return resolvePendingDeleteByEventQuery(target, state, calendar);
+  }
+
+  const source = target.kind === "recent_event_item" ? "recent_event_item" : "briefing_item";
+  const item = target.kind === "recent_event_item"
+    ? snapshot.recent_event_items?.find((candidate) => candidate.itemNumber === target.itemNumber)
+    : snapshot.briefing_items?.find((candidate) => candidate.itemNumber === target.itemNumber);
+  if (!item) {
+    const label = target.kind === "recent_event_item" ? "刚才展示的日程" : "日报";
+    return { ok: false, message: `没有找到${label}里的第 ${target.itemNumber} 条。` };
+  }
 
   return {
     ok: true,
     pendingDelete: {
       eventId: item.eventId,
       title: item.title,
-      source: "briefing_item",
+      source,
       itemNumber: item.itemNumber,
       date: item.date,
       startTime: item.startTime,
+    },
+  };
+}
+
+async function resolvePendingDeleteByEventQuery(
+  target: EventQueryReference,
+  state: ShortTermStateStore,
+  calendar: CalendarAdapter,
+): Promise<{ ok: true; pendingDelete: PendingDeleteState } | { ok: false; message: string }> {
+  const matches = await findEventsByStructuredQuery(target, state, calendar);
+  if (!matches.ok) return matches;
+  if (matches.events.length === 0) return { ok: false, message: "没有找到匹配的日程。" };
+
+  const items = matches.events.map(pendingDeleteItemFromCalendarEvent);
+  if (items.length === 1) {
+    return { ok: true, pendingDelete: { ...items[0], source: "event_query" } };
+  }
+
+  return {
+    ok: true,
+    pendingDelete: {
+      source: "event_query",
+      title: `匹配到的 ${items.length} 个日程`,
+      eventIds: items.map((item) => item.eventId),
+      items,
+      requireSelection: true,
+      ...(target.date ? { date: target.date } : {}),
+      ...(target.range ? { range: target.range } : {}),
     },
   };
 }
@@ -691,6 +738,67 @@ async function resolvePendingBatchDelete(
   };
 }
 
+async function findEventsByStructuredQuery(
+  target: EventQueryReference,
+  state: ShortTermStateStore,
+  calendar: CalendarAdapter,
+): Promise<{ ok: true; events: FeishuCalendarEvent[] } | { ok: false; message: string }> {
+  const candidates = target.date || target.range ? await listCalendarEventsForStructuredQuery(target, calendar) : eventsFromShortTermState(state);
+  if (!candidates.ok) return candidates;
+  return { ok: true, events: candidates.events.filter((event) => eventMatchesStructuredQuery(event, target)) };
+}
+
+async function listCalendarEventsForStructuredQuery(
+  target: EventQueryReference,
+  calendar: CalendarAdapter,
+): Promise<{ ok: true; events: FeishuCalendarEvent[] } | { ok: false; message: string }> {
+  const query = target.date ? { date: target.date } : target.range ? { range: target.range } : undefined;
+  if (!query) return { ok: true, events: [] };
+  const result = await calendar.listEvents(query);
+  if (!result.ok) return { ok: false, message: result.message };
+  return { ok: true, events: result.data };
+}
+
+function eventsFromShortTermState(state: ShortTermStateStore): { ok: true; events: FeishuCalendarEvent[] } {
+  const snapshot = state.snapshot();
+  const seen = new Set<string>();
+  const events: FeishuCalendarEvent[] = [];
+  const addItem = (item: { eventId: string; title: string; date?: string; startTime?: string }) => {
+    if (seen.has(item.eventId)) return;
+    seen.add(item.eventId);
+    events.push({ id: item.eventId, title: item.title, start: item.date && item.startTime ? `${item.date} ${item.startTime}` : "" });
+  };
+  if (snapshot.last_event) addItem(snapshot.last_event);
+  for (const item of snapshot.briefing_items || []) addItem(item);
+  for (const item of snapshot.recent_event_items || []) addItem(item);
+  return { ok: true, events };
+}
+
+function eventMatchesStructuredQuery(event: FeishuCalendarEvent, target: EventQueryReference): boolean {
+  const parsed = parseEventStart(event.start);
+  if (target.date && parsed.date !== target.date) return false;
+  if (target.range && (!parsed.date || parsed.date < target.range.startDate || parsed.date > target.range.endDate)) return false;
+  if (target.startTime && parsed.startTime !== target.startTime) return false;
+  if (target.timeWindow && !timeBelongsToWindow(parsed.startTime, target.timeWindow)) return false;
+  if (target.title && !normalizeMatchText(event.title).includes(normalizeMatchText(target.title))) return false;
+  return true;
+}
+
+function timeBelongsToWindow(startTime: string | undefined, window: NonNullable<EventQueryReference["timeWindow"]>): boolean {
+  if (!startTime) return false;
+  const hour = Number(startTime.slice(0, 2));
+  if (!Number.isInteger(hour)) return false;
+  if (window === "morning") return hour >= 5 && hour < 12;
+  if (window === "afternoon") return hour >= 12 && hour < 18;
+  return hour >= 18 && hour <= 23;
+}
+
+function normalizeMatchText(value: string): string {
+  return Array.from(value.normalize("NFKC").toLowerCase())
+    .filter((char) => char.trim().length > 0)
+    .join("");
+}
+
 async function executeDeleteConfirmation(
   confirmed: boolean,
   state: ShortTermStateStore,
@@ -705,7 +813,10 @@ async function executeDeleteConfirmation(
     return { ok: true, reply: "已取消删除。" };
   }
 
-  if (pendingDelete.source === "date_query") {
+  if (pendingDelete.source === "date_query" || "items" in pendingDelete) {
+    if (pendingDelete.source === "event_query" && pendingDelete.requireSelection && itemNumbers.length === 0) {
+      return { ok: false, reply: "没有成功：匹配到多个日程，请先回复要删除第几个。" };
+    }
     const selection = selectPendingBatchDeleteItems(pendingDelete, itemNumbers);
     if (!selection.ok) return { ok: false, reply: `没有成功：${selection.message}` };
     const result = await deleteManyEvents(calendar, { eventIds: selection.eventIds, confirmed: true });
@@ -727,7 +838,7 @@ async function executeDeleteConfirmation(
 }
 
 function selectPendingBatchDeleteItems(
-  pendingDelete: Extract<PendingDeleteState, { source: "date_query" }>,
+  pendingDelete: PendingDeleteState & { eventIds: string[]; items: PendingDeleteItemState[] },
   itemNumbers: number[],
 ): { ok: true; eventIds: string[]; items: typeof pendingDelete.items } | { ok: false; message: string } {
   if (itemNumbers.length === 0) {
@@ -782,7 +893,7 @@ async function executePendingConflictControl(input: {
 }
 
 function formatPendingDeleteForReply(pendingDelete: PendingDeleteState): string {
-  if (pendingDelete.source === "date_query") return formatPendingDeleteItemsForReply(pendingDelete.items);
+  if ("items" in pendingDelete) return formatPendingDeleteItemsForReply(pendingDelete.items);
   const start = pendingDelete.date && pendingDelete.startTime ? `${pendingDelete.date} ${pendingDelete.startTime}` : undefined;
   return formatCalendarEventDetail({ id: pendingDelete.eventId, title: pendingDelete.title, start });
 }
@@ -803,6 +914,9 @@ function clearDeletedState(state: ShortTermStateStore, deletedEventIds: string[]
     ...(snapshot.last_event?.eventId && deleted.has(snapshot.last_event.eventId) ? { last_event: undefined } : {}),
     ...(snapshot.briefing_items
       ? { briefing_items: snapshot.briefing_items.filter((item) => !deleted.has(item.eventId)) }
+      : {}),
+    ...(snapshot.recent_event_items
+      ? { recent_event_items: snapshot.recent_event_items.filter((item) => !deleted.has(item.eventId)) }
       : {}),
   });
 }
@@ -880,19 +994,38 @@ function shouldUseAutoScheduleStartTime(action: Extract<CalendarAction, { type: 
   return action.autoCreate === true || !action.date;
 }
 
-function resolveExecutableAction(
+async function resolveExecutableAction(
   action: CalendarAction,
   state: ShortTermStateStore,
-): { ok: true; action: CalendarAction } | { ok: false; message: string } {
-  const resolvedFromBriefingItem = action.type === "update_event" && action.target.kind === "briefing_item";
-  const resolved = resolveBriefingItemUpdate(action, state);
+  calendar: CalendarAdapter,
+): Promise<{ ok: true; action: CalendarAction } | { ok: false; message: string }> {
+  if (action.type === "update_event" && action.target.kind === "event_query") {
+    const matches = await findEventsByStructuredQuery(action.target, state, calendar);
+    if (!matches.ok) return matches;
+    if (matches.events.length === 0) return { ok: false, message: "没有找到匹配的日程。" };
+    if (matches.events.length > 1) return { ok: false, message: `匹配到多个日程，请先查询后用第几个来修改。\n${formatPendingDeleteItemsForReply(matches.events.map(pendingDeleteItemFromCalendarEvent))}` };
+    const parsed = parseEventStart(matches.events[0].start);
+    if (changesTimeWithoutDate(action.patch, action.patch.date || parsed.date)) return { ok: false, message: "这个日程是哪一天？" };
+    return {
+      ok: true,
+      action: {
+        ...action,
+        target: { kind: "last_event", eventId: matches.events[0].id },
+        patch: fillPatchDateFromLastEvent(action.patch, parsed.date),
+      },
+    };
+  }
+
+  const resolvedFromStateItem =
+    action.type === "update_event" && (action.target.kind === "briefing_item" || action.target.kind === "recent_event_item");
+  const resolved = resolveStateItemUpdate(action, state);
   if (!resolved.ok) return resolved;
   if (resolved.action.type !== "update_event" || resolved.action.target.kind !== "last_event") {
     return { ok: true, action: resolved.action };
   }
 
   const lastEvent = state.snapshot().last_event;
-  const targetEventId = resolvedFromBriefingItem ? resolved.action.target.eventId : lastEvent?.eventId;
+  const targetEventId = resolvedFromStateItem ? resolved.action.target.eventId : lastEvent?.eventId;
   if (!targetEventId) return { ok: false, message: "没有找到刚才那个日程。" };
   if (changesTimeWithoutDate(resolved.action.patch, lastEvent?.date)) return { ok: false, message: "这个日程是哪一天？" };
 
@@ -908,14 +1041,42 @@ function resolveExecutableAction(
 
 function updateState(state: ShortTermStateStore, action: CalendarAction, data: FeishuCalendarEvent | FeishuCalendarEvent[]) {
   if (Array.isArray(data)) {
+    const numberedItems = data.map((event, index) => briefingItemStateFromCalendarEvent(event, index + 1));
     state.update({
-      briefing_items: data.map((event, index) => briefingItemStateFromCalendarEvent(event, index + 1)),
+      briefing_items: numberedItems,
+      recent_event_items: numberedItems,
       ...(action.type === "create_events" && data.length > 0 ? { last_event: lastEventStateFromCalendarEvent(data[data.length - 1]) } : {}),
     });
     return;
   }
   if (action.type !== "create_event" && action.type !== "update_event") return;
   state.update({ last_event: lastEventStateFromCalendarEvent(data) });
+}
+
+function resolveStateItemUpdate(action: CalendarAction, state: ShortTermStateStore): { ok: true; action: CalendarAction } | { ok: false; message: string } {
+  if (action.type !== "update_event" || action.target.kind === "event_query" || action.target.kind === "last_event") {
+    return { ok: true, action };
+  }
+  if (action.target.kind === "briefing_item") return resolveBriefingItemUpdate(action, state);
+  if (action.target.kind !== "recent_event_item") return { ok: true, action };
+
+  const itemNumber = action.target.itemNumber;
+  const item = state.snapshot().recent_event_items?.find((candidate) => candidate.itemNumber === itemNumber);
+  if (!item) return { ok: false, message: `没有找到刚才展示的日程里的第 ${itemNumber} 条。` };
+
+  return {
+    ok: true,
+    action: {
+      type: "update_event",
+      target: { kind: "last_event", eventId: item.eventId },
+      patch: fillPatchDateFromStateItem(action.patch, item),
+    },
+  };
+}
+
+function fillPatchDateFromStateItem<T extends UpdateEventPatch>(patch: T, item: BriefingItemState): T {
+  if (!item.date || patch.date || (!patch.startTime && !patch.endTime)) return patch;
+  return { ...patch, date: item.date };
 }
 
 async function registerWechatReminders(input: {

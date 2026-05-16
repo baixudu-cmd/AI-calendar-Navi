@@ -102,5 +102,7 @@ export function toolCallToCalendarAction(call: AdaptableCalendarToolCall): Calen
 
 function toEventReference(target: ToolTargetReference): EventReference {
   if (target.kind === "last_event") return { kind: "last_event", eventId: "" };
-  return { kind: "briefing_item", itemNumber: target.itemNumber };
+  if (target.kind === "briefing_item") return { kind: "briefing_item", itemNumber: target.itemNumber };
+  if (target.kind === "recent_event_item") return { kind: "recent_event_item", itemNumber: target.itemNumber };
+  return target;
 }

@@ -42,15 +42,16 @@ export type PendingDeleteItemState = {
 };
 
 export type PendingSingleDeleteState = PendingDeleteItemState & {
-  source: "last_event" | "briefing_item";
+  source: "last_event" | "briefing_item" | "recent_event_item" | "event_query";
   itemNumber?: number;
 };
 
 export type PendingBatchDeleteState = {
-  source: "date_query";
+  source: "date_query" | "event_query";
   title: string;
   eventIds: string[];
   items: PendingDeleteItemState[];
+  requireSelection?: boolean;
   date?: string;
   range?: { startDate: string; endDate: string };
 };
@@ -95,6 +96,7 @@ export type ShortTermState = {
   last_event?: LastEventState;
   pending_clarification?: PendingClarificationState;
   briefing_items?: BriefingItemState[];
+  recent_event_items?: BriefingItemState[];
   pending_delete?: PendingDeleteState;
   pending_conflict?: PendingConflictState;
   pending_schedule?: PendingScheduleState;
@@ -156,6 +158,10 @@ function sanitizeState(value: Record<string, unknown>): ShortTermState {
   if (Array.isArray(value.briefing_items)) {
     const items = value.briefing_items.map(normalizeBriefingItem).filter((item): item is BriefingItemState => Boolean(item));
     if (items.length > 0) next.briefing_items = items;
+  }
+  if (Array.isArray(value.recent_event_items)) {
+    const items = value.recent_event_items.map(normalizeBriefingItem).filter((item): item is BriefingItemState => Boolean(item));
+    if (items.length > 0) next.recent_event_items = items;
   }
   const pendingDelete = normalizePendingDelete(value.pending_delete);
   if (pendingDelete) next.pending_delete = pendingDelete;
@@ -222,15 +228,21 @@ function normalizeBriefingItem(value: unknown): BriefingItemState | null {
 
 function normalizePendingDelete(value: unknown): PendingDeleteState | null {
   if (!isRecord(value) || !isNonEmptyString(value.title)) return null;
-  if (value.source === "date_query") return normalizePendingBatchDelete(value);
+  if (value.source === "date_query" || value.source === "event_query") {
+    if (Array.isArray(value.eventIds)) return normalizePendingBatchDelete(value);
+  }
   if (!isNonEmptyString(value.eventId)) return null;
-  if (value.source !== "last_event" && value.source !== "briefing_item") return null;
+  if (value.source !== "last_event" && value.source !== "briefing_item" && value.source !== "recent_event_item" && value.source !== "event_query") {
+    return null;
+  }
 
   return {
     eventId: value.eventId,
     title: value.title,
     source: value.source,
-    ...(value.source === "briefing_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0
+    ...((value.source === "briefing_item" || value.source === "recent_event_item") &&
+    Number.isInteger(value.itemNumber) &&
+    Number(value.itemNumber) > 0
       ? { itemNumber: Number(value.itemNumber) }
       : {}),
     ...(isNonEmptyString(value.date) ? { date: value.date } : {}),
@@ -240,6 +252,7 @@ function normalizePendingDelete(value: unknown): PendingDeleteState | null {
 
 function normalizePendingBatchDelete(value: Record<string, unknown>): PendingBatchDeleteState | null {
   if (!Array.isArray(value.eventIds)) return null;
+  const source = value.source === "event_query" ? "event_query" : "date_query";
   const eventIds = uniqueNonEmptyStrings(value.eventIds);
   if (eventIds.length === 0) return null;
 
@@ -249,10 +262,11 @@ function normalizePendingBatchDelete(value: Record<string, unknown>): PendingBat
   const safeItems = items.filter((item) => eventIds.includes(item.eventId));
 
   return {
-    source: "date_query",
+    source,
     title: String(value.title),
     eventIds,
     items: safeItems.length > 0 ? safeItems : eventIds.map((eventId) => ({ eventId, title: eventId })),
+    ...(value.requireSelection === true ? { requireSelection: true } : {}),
     ...(isNonEmptyString(value.date) && isValidDate(value.date) ? { date: value.date } : {}),
     ...(isRecord(value.range) && isValidDateRange(value.range)
       ? { range: { startDate: value.range.startDate, endDate: value.range.endDate } }

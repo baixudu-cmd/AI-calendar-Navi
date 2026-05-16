@@ -187,7 +187,7 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
   },
   "calendar.update_event": {
     toolName: "calendar.update_event",
-    description: "修改本地状态引用到的日程。",
+    description: "修改本地状态引用到的日程，或按结构化日期、时间段、标题查询后修改唯一匹配的日程。",
     parameters: {
       type: "object",
       required: ["target", "patch"],
@@ -300,7 +300,7 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
   },
   "calendar.delete_event": {
     toolName: "calendar.delete_event",
-    description: "删除本地状态引用到的一个日程。",
+    description: "发起单个日程删除确认；可引用本地状态，也可按结构化日期、时间段、标题查询候选后确认。",
     parameters: {
       type: "object",
       required: ["target"],

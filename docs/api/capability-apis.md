@@ -23,12 +23,12 @@
 | `model_tool.calendar.create_events` | implemented | `src/tool-contract` | 批量创建 2 到 5 个日程；部分冲突时会列出本次尚未写入的其他事项 | 可写日历、可登记提醒 |
 | `model_tool.calendar.create_and_propose_schedule` | implemented | `src/tool-contract` | 同一条消息里先创建明确日程，再为未定事项推荐时间 | 可写明确日程，可写 `pending_schedule`，待推荐事项确认前不写日历 |
 | `model_tool.calendar.list_events` | implemented | `src/tool-contract` | 查询一天或一段日期日程 | 只读日历 |
-| `model_tool.calendar.update_event` | implemented | `src/tool-contract` | 修改本地状态引用的日程 | 可写日历 |
+| `model_tool.calendar.update_event` | implemented | `src/tool-contract` | 修改本地状态引用的日程，支持刚展示日程编号，或按结构化日期、时间段、标题查找唯一日程后修改 | 可写日历 |
 | `model_tool.calendar.propose_schedule` | implemented | `src/tool-contract` | 推荐排程空档，可引用待推进目标，也可基于当前推荐重新推荐；回复会显示候选数量和确认边界 | 读 Seed Lite，写 `pending_schedule`，确认后才写日历 |
 | `model_tool.calendar.confirm_schedule` | implemented | `src/tool-contract` | 确认、取消或修改推荐位 | 确认后可写日历 |
 | `model_tool.assistant.remember_todo` | implemented | `src/tool-contract` | 记录待推进事项 | 可写 Seed Lite，可自动安排安全时间 |
 | `model_tool.assistant.manage_todos` | implemented | `src/tool-contract` | 查看、完成、取消、修改待推进，支持批量完成 / 取消，也可记录提醒时间或关闭提醒 | 只改 Seed Lite，不写日历、不登记提醒队列 |
-| `model_tool.calendar.delete_event` | implemented | `src/tool-contract` | 发起单个删除确认 | 写 `pending_delete` |
+| `model_tool.calendar.delete_event` | implemented | `src/tool-contract` | 发起单个删除确认；支持刚展示日程编号，也可按结构化日期、时间段、标题查找候选 | 写 `pending_delete` |
 | `model_tool.calendar.delete_events` | implemented | `src/tool-contract` | 发起批量删除确认 | 写 `pending_delete` |
 | `model_tool.calendar.confirm_delete` | implemented | `src/tool-contract` | 确认或取消删除 | 确认后可删日历 |
 | `model_tool.calendar.confirm_create` | implemented | `src/tool-contract` | 确认或取消冲突后的创建 | 确认后可写日历 |
@@ -77,6 +77,7 @@
 - `calendar.propose_schedule.optionCount` 可表达用户想看 1 到 5 个候选；确认前只更新 `pending_schedule`，不写日历。
 - `calendar.propose_schedule.contextRef` 目前只允许 `"pending_schedule"`，用于显式声明“本轮是在继续当前推荐”；没有这个字段时，旧推荐不会被自动复用。
 - `calendar.create_event`、`calendar.create_events` 和 `calendar.create_and_propose_schedule.events[]` 必须带 `startTimeEvidence`，且该片段必须来自用户原文；证据比较会容忍空白和全角/半角差异，但不会把系统推荐时间当作用户原文时间；如果时间是系统推荐出来的，只能先走排程推荐，不能直接写日历。
+- `calendar.update_event` / `calendar.delete_event` 的 `target` 可使用 `recent_event_item` 或 `event_query`。`recent_event_item` 用于刚展示或刚批量创建的日程编号；`event_query` 字段包括 `date`、`range`、`startTime`、`timeWindow`、`title`。这不是本地语义路由：语义仍由模型转换成结构化字段，本地只查找日历或短期状态；修改必须唯一匹配，删除匹配多个时只列候选并要求选择第几个。
 - `calendar.create_reminder` 用于“某天某时提醒我做某事”的明确到点提醒；底层仍复用日历创建，但会登记 `leadMinutes: 0` 的微信提醒，不再把这类请求降级成待推进。若提醒时间来自 `state.seed_items[].reminderAt`，工具可带 `sourceIds` 引用收件箱事项；API Bridge 会在执行前核验收件箱时间，创建成功后才移除对应 Seed Lite。
 - `calendar.create_and_propose_schedule` 可在一轮里处理“上午 10 点已有明确事项，下午还有未定事项”这类混合输入；明确事项成功写入后，未定事项会留下排程推荐上下文。
 - `calendar.create_events` 遇到部分冲突时不会偷写其他日程，回复会同时列出冲突和本次尚未写入的其他事项，避免用户以为下午事项丢失。

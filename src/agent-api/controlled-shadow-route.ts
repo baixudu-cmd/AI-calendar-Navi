@@ -25,7 +25,7 @@ export type ControlledShadowRouteDependencies = {
   calendar: CalendarAdapter;
   seenMessageIds?: Set<string>;
   today?: string;
-  now?: string;
+  now?: string | (() => string);
   timezone?: string;
   seedStore?: SeedLiteStore;
   wechatReminderStore?: WechatReminderStore;
@@ -70,7 +70,7 @@ export async function handleControlledShadowRoute(
     calendar: dependencies.calendar,
     seenMessageIds: dependencies.seenMessageIds,
     today: dependencies.today,
-    now: dependencies.now,
+    now: readRouteNow(dependencies.now),
     timezone: dependencies.timezone,
     seedStore: dependencies.seedStore,
     wechatReminderStore: dependencies.wechatReminderStore,
@@ -79,4 +79,9 @@ export async function handleControlledShadowRoute(
     clarifyEventDraftRepairer: dependencies.clarifyEventDraftRepairer,
     memoryDreamStore: dependencies.memoryDreamStore,
   });
+}
+
+// 每次请求独立读取当前时间，避免长驻 shadow server 把相对日期冻结在启动日。
+function readRouteNow(now: ControlledShadowRouteDependencies["now"]): string | undefined {
+  return typeof now === "function" ? now() : now;
 }

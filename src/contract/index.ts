@@ -14,9 +14,19 @@ export type EventDraft = {
 
 export type EventReference =
   | { kind: "last_event"; eventId: string }
-  | { kind: "briefing_item"; itemNumber: number };
+  | { kind: "briefing_item"; itemNumber: number }
+  | { kind: "recent_event_item"; itemNumber: number }
+  | EventQueryReference;
 
 export type EventQuery = { date: string } | { range: { startDate: string; endDate: string } };
+export type EventQueryReference = {
+  kind: "event_query";
+  date?: string;
+  range?: { startDate: string; endDate: string };
+  startTime?: string;
+  timeWindow?: "morning" | "afternoon" | "evening";
+  title?: string;
+};
 export type ScheduleItemDraft = {
   title?: string;
   target?: TodoTarget;
@@ -423,7 +433,36 @@ function normalizeInternalTarget(value: Record<string, unknown>): EventReference
   if (value.kind === "briefing_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0) {
     return { kind: "briefing_item", itemNumber: Number(value.itemNumber) };
   }
+  if (value.kind === "recent_event_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0) {
+    return { kind: "recent_event_item", itemNumber: Number(value.itemNumber) };
+  }
+  if (value.kind === "event_query") return normalizeEventQueryReference(value);
   return null;
+}
+
+function normalizeEventQueryReference(value: Record<string, unknown>): EventQueryReference | null {
+  const query: EventQueryReference = { kind: "event_query" };
+  if (isNonEmptyString(value.date) && isValidDate(value.date)) query.date = value.date;
+  if (
+    isRecord(value.range) &&
+    isNonEmptyString(value.range.startDate) &&
+    isNonEmptyString(value.range.endDate) &&
+    isValidDate(value.range.startDate) &&
+    isValidDate(value.range.endDate)
+  ) {
+    query.range = { startDate: value.range.startDate, endDate: value.range.endDate };
+  }
+  if (isNonEmptyString(value.startTime) && isValidTime(value.startTime)) query.startTime = value.startTime;
+  if (value.timeWindow === "morning" || value.timeWindow === "afternoon" || value.timeWindow === "evening") {
+    query.timeWindow = value.timeWindow;
+  }
+  if (isNonEmptyString(value.title)) query.title = value.title.trim();
+
+  const hasDateScope = Boolean(query.date || query.range);
+  const hasTargetSignal = Boolean(query.title || query.startTime || query.timeWindow);
+  if (!hasTargetSignal) return null;
+  if (!hasDateScope && !query.title) return null;
+  return query;
 }
 
 function normalizeTodoTarget(value: Record<string, unknown>): TodoTarget | null {
@@ -600,6 +639,12 @@ function normalizeTarget(value: Record<string, unknown>): EventReference | null 
   if (value.kind === "briefing_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0) {
     return { kind: "briefing_item", itemNumber: Number(value.itemNumber) };
   }
+
+  if (value.kind === "recent_event_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0) {
+    return { kind: "recent_event_item", itemNumber: Number(value.itemNumber) };
+  }
+
+  if (value.kind === "event_query") return normalizeEventQueryReference(value);
 
   return null;
 }

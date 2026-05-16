@@ -68,7 +68,7 @@ async function startServerWithLiveDependencies() {
         }),
       }),
       calendar: calendar.data,
-      now: process.env.SHADOW_ROUTE_NOW,
+      now: readShadowRouteNow,
       timezone: config.timezone,
       seedStore: createFileSeedLiteStore(process.env.SEED_LITE_STATE_FILE || appSettings.stateFiles.seedLite),
       memoryDreamStore: createFileMemoryDreamStore(process.env.MEMORY_DREAM_STATE_FILE || appSettings.stateFiles.memoryDream),
@@ -106,4 +106,9 @@ function readLeadMinutes(value: string | undefined, fallback: number[] = DEFAULT
     .map((item) => Number(item.trim()))
     .filter((item) => Number.isInteger(item) && item > 0);
   return minutes.length > 0 ? minutes : fallback;
+}
+
+// 真实长驻服务每次请求都取当前时间；SHADOW_ROUTE_NOW 只用于测试时显式冻结时间。
+function readShadowRouteNow(): string {
+  return process.env.SHADOW_ROUTE_NOW || new Date().toISOString();
 }

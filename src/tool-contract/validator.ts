@@ -1,9 +1,21 @@
 // 工具调用校验器：在执行前校验 toolName 和 arguments，危险删除默认失败关闭。
 
-import type { EventDraft, ScheduleContextRef, SchedulePreferredWindow, SettingsSummaryTopic, TodoPatch, TodoTarget } from "../contract/index.js";
+import type {
+  EventDraft,
+  EventQueryReference,
+  ScheduleContextRef,
+  SchedulePreferredWindow,
+  SettingsSummaryTopic,
+  TodoPatch,
+  TodoTarget,
+} from "../contract/index.js";
 import { TOOL_NAMES, type CalendarToolName } from "./schemas.js";
 
-export type ToolTargetReference = { kind: "last_event" } | { kind: "briefing_item"; itemNumber: number };
+export type ToolTargetReference =
+  | { kind: "last_event" }
+  | { kind: "briefing_item"; itemNumber: number }
+  | { kind: "recent_event_item"; itemNumber: number }
+  | EventQueryReference;
 export type ToolDeleteEventsQuery = { date: string } | { range: { startDate: string; endDate: string } };
 export type ToolScheduleItem = {
   title?: string;
@@ -320,7 +332,7 @@ function validateUpdateEvent(value: Record<string, unknown>): ToolValidationResu
   }
 
   const target = normalizeTarget(value.target);
-  if (!target) return fail("guard_rejected", "修改日程需要 last_event 或 briefing_item 引用。");
+  if (!target) return fail("guard_rejected", "修改日程需要本地引用，或结构化的日期、时间段、标题查询。");
   if (Object.keys(value.patch).length === 0) return fail("missing_arguments", "修改日程需要 patch。");
 
   const invalid = invalidEventDateTime(value.patch, ["date", "startTime", "endTime"]);
@@ -442,7 +454,7 @@ function validateDeleteEvent(value: Record<string, unknown>): ToolValidationResu
   if (!isRecord(value.target)) return fail("missing_arguments", "删除日程需要 target。");
 
   const target = normalizeTarget(value.target);
-  if (!target) return fail("guard_rejected", "删除日程需要 last_event 或 briefing_item 引用，不能全删或按自由文本删除。");
+  if (!target) return fail("guard_rejected", "删除日程需要本地引用，或结构化的日期、时间段、标题查询，不能全删或按自由文本删除。");
 
   return { ok: true, call: { toolName: "calendar.delete_event", arguments: { target } } };
 }
@@ -542,8 +554,39 @@ function normalizeTarget(value: Record<string, unknown>): ToolTargetReference | 
   if (value.kind === "briefing_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0) {
     return { kind: "briefing_item", itemNumber: Number(value.itemNumber) };
   }
+  if (value.kind === "recent_event_item" && Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0) {
+    return { kind: "recent_event_item", itemNumber: Number(value.itemNumber) };
+  }
+  if (value.kind === "event_query") return normalizeEventQueryTarget(value);
 
   return null;
+}
+
+function normalizeEventQueryTarget(value: Record<string, unknown>): EventQueryReference | null {
+  const target: EventQueryReference = { kind: "event_query" };
+  if (isNonEmptyString(value.date)) {
+    if (!isValidDate(value.date)) return null;
+    target.date = value.date;
+  }
+  if (isRecord(value.range)) {
+    if (!isNonEmptyString(value.range.startDate) || !isNonEmptyString(value.range.endDate)) return null;
+    if (!isValidDate(value.range.startDate) || !isValidDate(value.range.endDate)) return null;
+    target.range = { startDate: value.range.startDate, endDate: value.range.endDate };
+  }
+  if (isNonEmptyString(value.startTime)) {
+    if (!isValidTime(value.startTime)) return null;
+    target.startTime = value.startTime;
+  }
+  if (value.timeWindow === "morning" || value.timeWindow === "afternoon" || value.timeWindow === "evening") {
+    target.timeWindow = value.timeWindow;
+  }
+  if (isNonEmptyString(value.title)) target.title = value.title.trim();
+
+  const hasDateScope = Boolean(target.date || target.range);
+  const hasTargetSignal = Boolean(target.title || target.startTime || target.timeWindow);
+  if (!hasTargetSignal) return null;
+  if (!hasDateScope && !target.title) return null;
+  return target;
 }
 
 function normalizeTodoTarget(value: Record<string, unknown>): ToolTodoTarget | null {
@@ -616,7 +659,8 @@ function hasStartTimeEvidence(value: Record<string, unknown>, sourceText: string
   if (!isNonEmptyString(value.startTimeEvidence)) return false;
   const normalizedSource = normalizeEvidenceText(sourceText);
   const normalizedEvidence = normalizeEvidenceText(value.startTimeEvidence);
-  return normalizedEvidence.length > 0 && normalizedSource.includes(normalizedEvidence);
+  if (normalizedEvidence.length > 0 && normalizedSource.includes(normalizedEvidence)) return true;
+  return canonicalTimeEvidenceVariants(value.startTimeEvidence).some((variant) => normalizedSource.includes(normalizeEvidenceText(variant)));
 }
 
 function hasSourceIds(value: Record<string, unknown>): boolean {
@@ -627,6 +671,25 @@ function normalizeEvidenceText(value: string): string {
   return Array.from(value.normalize("NFKC"))
     .filter((char) => char.trim().length > 0)
     .join("");
+}
+
+function canonicalTimeEvidenceVariants(value: string): string[] {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.normalize("NFKC").trim());
+  if (!match || match[2] !== "00") return [];
+  const hour = Number(match[1]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return [];
+
+  const variants = [`${hour}:00`, `${String(hour).padStart(2, "0")}:00`, `${hour}点`, `${String(hour).padStart(2, "0")}点`];
+  if (hour >= 5 && hour < 12) variants.push(`上午${hour}点`, `早上${hour}点`);
+  if (hour >= 12 && hour < 18) {
+    const twelveHour = hour === 12 ? 12 : hour - 12;
+    variants.push(`下午${twelveHour}点`, `下午${String(twelveHour).padStart(2, "0")}点`);
+  }
+  if (hour >= 18 && hour <= 23) {
+    const twelveHour = hour - 12;
+    variants.push(`晚上${twelveHour}点`, `晚${twelveHour}点`, `晚上${String(twelveHour).padStart(2, "0")}点`);
+  }
+  return variants;
 }
 
 function normalizeScheduleItemChanges(value: unknown): { ok: true; data: ToolScheduleItemChange[] } | ToolValidationFailure {

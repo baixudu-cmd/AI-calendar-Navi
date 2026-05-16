@@ -49,6 +49,9 @@ export async function executeCalendarAction(
       if (action.target.kind === "briefing_item") {
         return { ok: false, code: "skipped", message: "briefing_item 修改留到日报阶段处理。" };
       }
+      if (action.target.kind !== "last_event") {
+        return { ok: false, code: "skipped", message: "结构化查询修改由 API Bridge 先解析成事件 ID。" };
+      }
 
       return updateEvent(adapter, { eventId: action.target.eventId, patch: action.patch });
     case "propose_schedule":

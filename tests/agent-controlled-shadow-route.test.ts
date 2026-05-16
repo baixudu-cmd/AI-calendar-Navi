@@ -168,6 +168,31 @@ describe("handleControlledShadowRoute", () => {
     expect(result.actionType).toBe("list_events");
   });
 
+  it("reads current time for each shadow route request instead of freezing at server startup", async () => {
+    const seenNow: Array<string | undefined> = [];
+    let now = "2026-05-16T08:00:00+08:00";
+    const route = createControlledShadowRoute({
+      expectedSecret: "shadow_secret",
+      state: createShortTermStateStore(),
+      seenMessageIds: new Set(),
+      now: () => now,
+      timezone: "Asia/Shanghai",
+      decisionClient: {
+        decide: async (request) => {
+          seenNow.push(request.now);
+          return { action: "list_events", date: request.now?.slice(0, 10) || "2026-05-16" };
+        },
+      },
+      calendar: createFakeCalendar(),
+    });
+
+    await route({ text: "查一下今天日程", requestId: "req_time_1", secret: "shadow_secret" });
+    now = "2026-05-17T08:00:00+08:00";
+    await route({ text: "查一下今天日程", requestId: "req_time_2", secret: "shadow_secret" });
+
+    expect(seenNow).toEqual(["2026-05-16T08:00:00+08:00", "2026-05-17T08:00:00+08:00"]);
+  });
+
   it("handles daily briefing through the controlled shadow route without exposing server dependencies", async () => {
     const state = createShortTermStateStore();
     const calendar = createFakeCalendar();
