@@ -18,7 +18,7 @@ These are safe to keep on GitHub:
 Do not commit:
 
 - `.env`, `.env.*`, local secrets, model keys, Feishu secrets, WeChat secrets.
-- Tailscale IP addresses, personal usernames, personal machine paths, SSH passwords.
+- Private network addresses, personal usernames, personal machine paths, SSH passwords.
 - Real OpenClaw contact IDs, group IDs, account IDs or message logs.
 - Local `state/`, `logs/`, `node_modules/`, `.venv/`, `.worktrees/`.
 - Private calendar IDs unless they are fake examples.

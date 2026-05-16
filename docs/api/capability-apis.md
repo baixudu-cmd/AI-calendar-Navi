@@ -6,7 +6,7 @@
 | --- | --- | --- | --- | --- |
 | `capability.registry` | implemented | `src/capability-api/index.ts` | 查询能力目录和单个能力合同 | 无副作用 |
 | `assistant.core` | implemented | `src/capability-api/index.ts` | 处理单条用户消息；调用方只传本次消息，依赖由服务端固定 | 复用 `assistant.handle_message` 的副作用 |
-| `runtime.operations` | implemented | `src/capability-api/index.ts` | 聚合做梦整理、主动早晚报、微信提醒派发、提醒队列查询 | 可写本地记忆、可发送微信、可更新提醒队列 |
+| `runtime.operations` | implemented | `src/capability-api/index.ts` | 聚合记忆整理、主动早晚报、微信提醒派发、提醒队列查询 | 可写本地记忆、可发送微信、可更新提醒队列 |
 
 这三个是给后续 AI 优先使用的入口。更细的 `model_tool.*` 和运行任务 API 仍保留在能力目录里，方便排错和扩展，但一般不需要直接穿透调用内部模块。
 
@@ -40,7 +40,7 @@
 | `memory_dream.consolidate_daily` | implemented | `src/memory-dream/index.ts` | 每日本地记忆整理 | 可写本地 memory dream 文件 |
 | `wechat_reminder.dispatch_due` | implemented | `src/wechat-reminder/index.ts` | 派发到点微信提醒 | 可发送微信、更新提醒队列 |
 | `proactive.daily_briefing` | implemented | `src/live/proactive-briefing-cli.ts` | 主动早报和晚报 | 可只读主日历、可发送微信 |
-| `runtime.self_use_doctor` | implemented | `src/live/self-use-runtime-doctor-cli.ts` | 自用运行体检 | 只读运行状态 |
+| `runtime.self_use_doctor` | implemented | `src/live/self-use-runtime-doctor-cli.ts` | 运行体检 | 只读运行状态 |
 
 ## 错误情况
 
@@ -85,10 +85,10 @@
 - `assistant.settings_summary` 可在用户询问提醒时间、模型 API、日历写入、记忆文件或运行入口时，返回只读、脱敏的关键设置总结；它会读取 `.env` 的脱敏状态和 `config/settings.local.json` 的非密钥默认值，并展示追问策略、早晚报排程和确认前不写日历等低摩擦规则，不写日历、不写状态、不暴露密钥原文。
 - `assistant.status_overview` 可在用户询问“你现在记着什么”“刚才那个还在吗”“还有哪些没处理”时，只读汇总待补时间、待确认推荐、待确认删除、冲突确认和待推进事项；它不访问日历、不写状态。
 - `assistant.dismiss_context` 可在用户说“算了”“先不管了”这类放弃当前上下文时，清理待补时间、待确认推荐、待确认删除、冲突确认和图片草稿；它不访问日历、不写 Seed Lite。
-- 两段路由实验已经从活跃源码中移除，不再出现在公共导出、能力目录或测试入口中；历史结论保留在旧阶段文档里。
+- 两段路由实验已经从活跃源码中移除，不再出现在公共导出、能力目录或测试入口中；历史结论保留在内部设计记录里。
 - 能力目录只登记已实现能力；未验证或计划中的能力只能放在计划和评审文档里。
 
-未纳入本阶段：
+暂不包含：
 
 - 不新增正则、关键词路由或 prompt 例句补丁。
 - 不新增后台读屏、截图、Trigger、多用户后台。

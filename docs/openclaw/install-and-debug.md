@@ -14,8 +14,8 @@
 安装项目：
 
 ```bash
-git clone https://github.com/baixudu-cmd/navi-calendar.git
-cd navi-calendar
+git clone https://github.com/baixudu-cmd/AI-calendar-Navi.git
+cd AI-calendar-Navi
 npm ci
 cp .env.example .env
 cp config/settings.example.json config/settings.local.json
@@ -133,7 +133,7 @@ npm run openclaw:shadow-caller-smoke
 
 ## 7. 安全边界
 
-- 不提交 `.env`、真实 token、Tailscale 地址、个人机器路径或微信联系人标识。
+- 不提交 `.env`、真实 token、私有网络地址、个人机器路径或微信联系人标识。
 - OpenClaw caller 只传 `text`、`messageId`、`requestId`、`secret` 和可选媒体信息。
 - 日历创建、修改、删除都以 Navi 的工具执行结果为准。
 - 推荐排程确认前不写日历。

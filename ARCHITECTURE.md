@@ -1,58 +1,68 @@
 # Architecture
 
-Navi Calendar is a self-hosted WeChat calendar assistant. The public architecture keeps one clear boundary: the model understands the user once, and deterministic tools perform every side effect.
+Navi Calendar follows a model-first, tool-controlled architecture. The model interprets a request once and selects a structured tool; deterministic modules validate and execute the action.
 
 ```mermaid
 flowchart TD
-  user["WeChat / OpenClaw input"] --> entry["entry: non-semantic guards"]
-  entry --> decision["model decision"]
-  decision --> contract["tool contract validation"]
-  contract --> api["agent API orchestration"]
-  api --> calendar["calendar API / Feishu"]
-  api --> inbox["todo inbox"]
-  api --> scheduler["schedule proposals"]
-  api --> reminders["WeChat reminder queue"]
-  api --> state["short-term state"]
-  calendar --> reply["short reply"]
+  input["Message input"] --> entry["Entry guards"]
+  entry --> decision["Model decision"]
+  decision --> contract["Tool contract"]
+  contract --> api["Agent API"]
+  api --> calendar["Calendar API"]
+  api --> inbox["Todo inbox"]
+  api --> scheduler["Scheduler"]
+  api --> reminder["Reminder queue"]
+  api --> memory["Local memory"]
+  calendar --> reply["Short reply"]
   inbox --> reply
   scheduler --> reply
-  reminders --> reply
+  reminder --> reply
 ```
 
-## Boundaries
+## Principles
 
-- `entry` handles only empty input, length, duplicate messages and runtime guards. It does not decide calendar semantics.
-- `decision` is the only model interpretation layer.
-- `tool-contract` validates every model-selected tool before execution.
-- `agent-api` turns validated tool calls into controlled calendar, inbox, schedule, reminder and status operations.
-- `calendar-api` is the side-effect boundary. The assistant can only say an event was created, updated or deleted after this layer succeeds.
-- `seed-lite` stores unscheduled todo items separately from calendar events.
-- `scheduler` proposes time slots but does not write calendar events until the user confirms.
-- `settings` reads non-secret local JSON settings. Secrets stay in `.env`.
+- Entry guards only handle operational checks such as empty input, duplicate messages, length limits, and runtime configuration.
+- The model is the only semantic decision layer.
+- Tool contracts validate all model-selected actions before execution.
+- Calendar writes, updates, and deletions are performed only by the calendar API.
+- Schedule proposals, deletes, and conflict resolution require confirmation before final write actions.
+- The todo inbox stores unscheduled items separately from calendar events.
+- Local memory can provide schedule preferences, but it cannot write or move calendar events by itself.
+- Secrets stay in `.env`; non-secret defaults stay in `config/settings.local.json`.
 
 ## Main Modules
 
-- `src/entry`: request guards that do not inspect user intent.
-- `src/decision`: model client and structured tool-call decision.
-- `src/tool-contract`: schemas, validation and allowed tool names.
-- `src/agent-api`: main assistant execution surface for WeChat / OpenClaw.
+- `src/entry`: operational request guards.
+- `src/decision`: model client and structured decision interface.
+- `src/tool-contract`: tool schemas and validation.
+- `src/agent-api`: main assistant orchestration surface.
 - `src/calendar-api`: deterministic calendar operations.
-- `src/seed-lite`: todo inbox storage.
-- `src/scheduler`: schedule candidate generation.
+- `src/seed-lite`: lightweight todo inbox.
+- `src/scheduler`: schedule proposal generation.
 - `src/briefing`: daily briefings and workbench summaries.
-- `src/wechat-reminder`: reminder queue and dispatch support.
-- `src/settings` and `src/settings-summary`: public-safe configuration summaries.
-- `src/status-overview`: read-only current pending-state overview.
+- `src/wechat-reminder`: reminder queue support.
+- `src/settings`: non-secret settings loader.
+- `src/status-overview`: read-only pending-state overview.
 
-## Runtime Configuration
+## Configuration
 
-Navi uses two configuration layers:
+```text
+.env
+  secrets and external service IDs
 
-- `.env` for secrets and external service IDs.
-- `config/settings.local.json` for non-secret product defaults.
+config/settings.local.json
+  non-secret product defaults
+```
 
-The public repository includes `.env.example` and `config/settings.example.json` only.
+The public repository includes only `.env.example` and `config/settings.example.json`.
 
 ## Public Release Boundary
 
-The live development repository may contain private runbooks and planning records. Public GitHub releases should be generated from the clean export manifest, not by publishing the live repository history directly.
+Public releases should be generated with:
+
+```bash
+npm run public:export
+npm run public:audit
+```
+
+Publish the generated `dist/public/navi-calendar` directory, not a private development workspace with local history and deployment notes.

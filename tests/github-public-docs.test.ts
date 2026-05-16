@@ -58,7 +58,7 @@ describe("GitHub public docs", () => {
     expect(publication).toContain("Public by default");
     expect(publication).toContain("Keep private");
     expect(publication).toContain(".env");
-    expect(publication).toContain("Tailscale");
+    expect(publication).toContain("Private network addresses");
     expect(publication).toContain("OpenClaw");
     expect(publication).toContain("dist/public/navi-calendar");
   });
@@ -71,5 +71,9 @@ describe("GitHub public docs", () => {
     expect(setupTemplate).toContain("OpenClaw");
     expect(setupTemplate).toContain("redacted");
     expect(setupTemplate).not.toContain("MODEL_API_KEY");
+
+    const pullRequestTemplate = read(".github/PULL_REQUEST_TEMPLATE.md");
+    expect(pullRequestTemplate).toContain("Runtime checks");
+    expect(pullRequestTemplate).not.toContain("Mac mini");
   });
 });
