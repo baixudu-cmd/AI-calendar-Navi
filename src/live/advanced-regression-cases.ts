@@ -450,7 +450,7 @@ function mixedCreateScheduleScenarios(): AdvancedRegressionScenario[] {
       steps: [
         {
           text: "周六上午10点澄澄游泳，下午和 hanqi 吃饭以及去奥莱",
-          expected: { actionType: "create_and_propose_schedule", replyIncludes: ["已新增", "澄澄游泳", "推荐", "hanqi"] },
+          expected: { actionType: "create_and_propose_schedule", replyIncludes: ["已新增", "澄澄游泳", "可选时间", "hanqi"] },
         },
       ],
       expectedFinalEvents: [event("evt_1", "澄澄游泳", "2026-05-09", "10:00")],
@@ -462,7 +462,7 @@ function mixedCreateScheduleScenarios(): AdvancedRegressionScenario[] {
       steps: [
         {
           text: "周六上午10点湛湛游泳，下午和 hanqi 吃饭以及去奥莱",
-          expected: { actionType: "create_and_propose_schedule", replyIncludes: ["这个时间已有日程", "湛湛游泳", "推荐", "hanqi"] },
+          expected: { actionType: "create_and_propose_schedule", replyIncludes: ["这个时间已有日程", "湛湛游泳", "可选时间", "hanqi"] },
         },
       ],
       expectedFinalEvents: [event("evt_existing_swim", "湛湛游泳", "2026-05-09", "10:00")],
@@ -546,7 +546,7 @@ function scheduleContextScenarios(): AdvancedRegressionScenario[] {
         },
       },
       seedItems: [{ seedId: "seed_1", title: "拿币" }],
-      steps: [{ text: "帮我给拿币推荐几个时间", expected: { actionType: "propose_schedule", replyIncludes: ["推荐", "拿币"] } }],
+      steps: [{ text: "帮我给拿币推荐几个时间", expected: { actionType: "propose_schedule", replyIncludes: ["可选时间", "拿币"] } }],
       expectedFinalEvents: [],
     },
     {
@@ -560,16 +560,16 @@ function scheduleContextScenarios(): AdvancedRegressionScenario[] {
         },
       },
       seedItems: [{ seedId: "seed_1", title: "拿币" }],
-      steps: [{ text: "帮我给拿币推荐几个时间", expected: { actionType: "propose_schedule", replyIncludes: ["推荐", "拿币"] } }],
+      steps: [{ text: "帮我给拿币推荐几个时间", expected: { actionType: "propose_schedule", replyIncludes: ["可选时间", "拿币"] } }],
       expectedFinalEvents: [],
     },
   ];
 }
 
 function buildScheduleContextSteps(item: ScheduleContextCase): AdvancedRegressionStep[] {
-  const secondReplyIncludes = item.secondActionType === "propose_schedule" ? ["推荐"] : ["已新增"];
+  const secondReplyIncludes = item.secondActionType === "propose_schedule" ? ["可选时间"] : ["已新增"];
   const steps: AdvancedRegressionStep[] = [
-    { text: item.firstText, expected: { actionType: "propose_schedule", replyIncludes: ["推荐"] } },
+    { text: item.firstText, expected: { actionType: "propose_schedule", replyIncludes: ["可选时间"] } },
     { text: item.secondText, expected: { actionType: item.secondActionType, replyIncludes: secondReplyIncludes } },
   ];
   if (item.thirdText) {

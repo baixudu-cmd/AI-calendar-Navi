@@ -121,7 +121,7 @@ function expandedScheduleContextScenarios(): AdvancedRegressionScenario[] {
       id: "advanced_schedule_context_012",
       category: "schedule_context",
       steps: [
-        { text: "明天把找律师和更新模型排一下", expected: { actionType: "propose_schedule", replyIncludes: ["推荐"] } },
+        { text: "明天把找律师和更新模型排一下", expected: { actionType: "propose_schedule", replyIncludes: ["可选时间"] } },
         { text: "第一个10点，第二个11点", expected: { actionType: "create_events", replyIncludes: ["已新增"] } },
       ],
       expectedFinalEvents: [
@@ -134,7 +134,7 @@ function expandedScheduleContextScenarios(): AdvancedRegressionScenario[] {
       category: "schedule_context",
       seedEvents: [event("evt_busy_013", "已有晨会", TOMORROW, "09:00")],
       steps: [
-        { text: "明天帮我排一下看法律条款", expected: { actionType: "propose_schedule", replyIncludes: ["推荐"] } },
+        { text: "明天帮我排一下看法律条款", expected: { actionType: "propose_schedule", replyIncludes: ["可选时间"] } },
         { text: "第一个可以", expected: { actionType: "create_event", replyIncludes: ["已新增"] } },
       ],
       expectedFinalEvents: [
@@ -147,7 +147,7 @@ function expandedScheduleContextScenarios(): AdvancedRegressionScenario[] {
       id: "advanced_schedule_context_015",
       category: "schedule_context",
       steps: [
-        { text: "帮我安排一下写周报", expected: { actionType: "propose_schedule", replyIncludes: ["推荐", "写周报"] } },
+        { text: "帮我安排一下写周报", expected: { actionType: "propose_schedule", replyIncludes: ["可选时间", "写周报"] } },
         { text: "选第一个", expected: { actionType: "create_event", replyIncludes: ["已新增"] } },
       ],
       expectedFinalEvents: [{ ...event("evt_1", "写周报", TODAY, "09:00"), startTimes: ["09:00", "09:30"] }],
@@ -169,7 +169,7 @@ function expandedScheduleContextScenarios(): AdvancedRegressionScenario[] {
           createDraft: { title: "旧会议", date: TOMORROW },
         },
       },
-      steps: [{ text: "不是这个，帮我给处理发票推荐几个时间", expected: { actionType: "propose_schedule", replyIncludes: ["推荐", "处理发票"] } }],
+      steps: [{ text: "不是这个，帮我给处理发票推荐几个时间", expected: { actionType: "propose_schedule", replyIncludes: ["可选时间", "处理发票"] } }],
       expectedFinalEvents: [],
     },
     {
@@ -250,7 +250,7 @@ function mixedCreate(id: string, text: string, title: string, startTime: string,
   return {
     id: `advanced_mixed_create_schedule_${id}`,
     category: "mixed_create_schedule",
-    steps: [{ text, expected: { actionType: "create_and_propose_schedule", replyIncludes: ["已新增", title, "推荐", ...replyIncludes] } }],
+    steps: [{ text, expected: { actionType: "create_and_propose_schedule", replyIncludes: ["已新增", title, "可选时间", ...replyIncludes] } }],
     expectedFinalEvents: [event("evt_1", title, TOMORROW, startTime)],
   };
 }
@@ -262,7 +262,7 @@ function mixedConflict(id: string, text: string, title: string, startTime: strin
     id: `advanced_mixed_create_schedule_${id}`,
     category: "mixed_create_schedule",
     seedEvents: [event(`evt_existing_mixed_${id}`, title, TOMORROW, startTime)],
-    steps: [{ text, expected: { actionType: "create_and_propose_schedule", replyIncludes: ["这个时间已有日程", title, "推荐", ...replyIncludes] } }],
+    steps: [{ text, expected: { actionType: "create_and_propose_schedule", replyIncludes: ["这个时间已有日程", title, "可选时间", ...replyIncludes] } }],
     expectedFinalEvents: [event(`evt_existing_mixed_${id}`, title, TOMORROW, startTime)],
   };
 }
@@ -273,7 +273,7 @@ function scheduleConfirm(id: string, firstText: string, title: string, secondTex
     id: `advanced_schedule_context_${id}`,
     category: "schedule_context",
     steps: [
-      { text: firstText, expected: { actionType: "propose_schedule", replyIncludes: ["推荐", title] } },
+      { text: firstText, expected: { actionType: "propose_schedule", replyIncludes: ["可选时间", title] } },
       { text: secondText, expected: { actionType: "create_event", replyIncludes: ["已新增"] } },
     ],
     expectedFinalEvents: [event("evt_1", title, TOMORROW, startTime)],
@@ -286,8 +286,8 @@ function scheduleReproposal(id: string, firstText: string, title: string, second
     id: `advanced_schedule_context_${id}`,
     category: "schedule_context",
     steps: [
-      { text: firstText, expected: { actionType: "propose_schedule", replyIncludes: ["推荐", title] } },
-      { text: secondText, expected: { actionType: "propose_schedule", replyIncludes: ["推荐"] } },
+      { text: firstText, expected: { actionType: "propose_schedule", replyIncludes: ["可选时间", title] } },
+      { text: secondText, expected: { actionType: "propose_schedule", replyIncludes: ["可选时间"] } },
       { text: thirdText, expected: { actionType: "create_event", replyIncludes: ["已新增"] } },
     ],
     expectedFinalEvents: [event("evt_1", title, TOMORROW, startTime)],

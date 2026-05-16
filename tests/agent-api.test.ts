@@ -1828,7 +1828,7 @@ describe("handleCalendarAgentRequest", () => {
     });
 
     expect(result).toMatchObject({ ok: true, actionType: "propose_schedule", requestId: "req_propose_schedule" });
-    expect(result.reply).toContain("推荐 1");
+    expect(result.reply).toContain("1. 2026-05-12 10:00 看材料");
     expect(result.reply).toContain("看材料");
     expect(state.snapshot().pending_schedule?.options[0]?.items[0]).toMatchObject({
       itemNumber: 1,
@@ -1883,7 +1883,7 @@ describe("handleCalendarAgentRequest", () => {
     expect(result).toMatchObject({ ok: true, actionType: "create_and_propose_schedule", requestId: "req_mixed_create_schedule" });
     expect(result.reply).toContain("已新增日程");
     expect(result.reply).toContain("澄澄游泳");
-    expect(result.reply).toContain("推荐 1");
+    expect(result.reply).toContain("1. 2026-05-16 15:00 和 hanqi 吃饭以及去奥莱");
     expect(result.reply).toContain("和 hanqi 吃饭以及去奥莱");
     await expect(calendar.listEvents({ date: "2026-05-16" })).resolves.toMatchObject({
       ok: true,
@@ -1949,7 +1949,8 @@ describe("handleCalendarAgentRequest", () => {
     expect(result).toMatchObject({ ok: true, actionType: "create_and_propose_schedule", requestId: "req_mixed_create_schedule_strict_afternoon" });
     expect(result.reply).not.toContain("2026-05-18 09:00");
     expect(result.reply).not.toContain("2026-05-18 11:00");
-    expect(result.reply).not.toContain("\n1. 2026-05-18");
+    expect(result.reply).toContain("回复“选 1/2/3”确认。");
+    expect(result.reply).not.toContain("第一个改到 11 点");
     expect(state.snapshot().pending_schedule?.options.map((option) => option.items[0]?.startTime)).toEqual(["14:00", "14:30", "15:00"]);
   });
 
@@ -1994,7 +1995,7 @@ describe("handleCalendarAgentRequest", () => {
     expect(result).toMatchObject({ ok: true, actionType: "create_and_propose_schedule", requestId: "req_mixed_create_conflict_schedule" });
     expect(result.reply).toContain("这个时间已有日程");
     expect(result.reply).toContain("湛湛游泳");
-    expect(result.reply).toContain("推荐 1");
+    expect(result.reply).toContain("1. 2026-05-16 15:00 和 hanqi 吃饭以及去奥莱");
     expect(result.reply).toContain("和 hanqi 吃饭以及去奥莱");
     await expect(calendar.listEvents({ date: "2026-05-16" })).resolves.toMatchObject({
       ok: true,
@@ -2340,7 +2341,7 @@ describe("handleCalendarAgentRequest", () => {
     });
 
     expect(result).toMatchObject({ ok: true, actionType: "propose_schedule", requestId: "req_repropose_schedule_afternoon" });
-    expect(result.reply).toContain("推荐 1");
+    expect(result.reply).toContain("1. 2026-05-12 14:00 看材料");
     expect(state.snapshot().pending_schedule?.options[0]?.items[0]).toMatchObject({
       title: "看材料",
       date: "2026-05-12",

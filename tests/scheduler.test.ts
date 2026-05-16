@@ -129,10 +129,12 @@ describe("scheduler memory dream bridge", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("因为这段时间没有冲突");
+      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("原因：这段时间没有冲突");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("共 1 个候选");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("确认前不会写入日历");
-      expect(formatScheduleProposalReply(result.pendingSchedule)).not.toContain("\n1. 2026-05-14");
+      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("\n1. 2026-05-14 11:00 整理材料");
+      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("回复“选 1”确认。");
+      expect(formatScheduleProposalReply(result.pendingSchedule)).not.toContain("第一个改到 11 点");
     }
   });
 });

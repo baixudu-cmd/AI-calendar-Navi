@@ -129,12 +129,18 @@ export function formatScheduleProposalReply(pendingSchedule: PendingScheduleStat
   const options = pendingSchedule.options.map((option) => {
     if (option.items.length === 1) {
       const item = option.items[0];
-      return `推荐 ${option.optionNumber}：${item.date} ${item.startTime} ${item.title}（因为这段时间没有冲突）`;
+      return `${option.optionNumber}. ${item.date} ${item.startTime} ${item.title}\n   原因：这段时间没有冲突`;
     }
-    const lines = option.items.map((item) => `- 事项 ${item.itemNumber}：${item.date} ${item.startTime} ${item.title}`);
-    return `推荐 ${option.optionNumber}：因为这段时间没有冲突。\n${lines.join("\n")}`;
+    const lines = option.items.map((item) => `   - 事项 ${item.itemNumber}：${item.date} ${item.startTime} ${item.title}`);
+    return `${option.optionNumber}. 推荐方案\n   原因：这段时间没有冲突\n${lines.join("\n")}`;
   });
-  return `我找到这些可选时间（共 ${pendingSchedule.options.length} 个候选，确认前不会写入日历）：\n${options.join("\n")}\n可以回复“选第几个”，也可以说“第一个改到 11 点”。`;
+  return `我找到这些可选时间（共 ${pendingSchedule.options.length} 个候选，确认前不会写入日历）：\n${options.join("\n")}\n${formatScheduleSelectionHint(pendingSchedule.options.length)}`;
+}
+
+function formatScheduleSelectionHint(optionCount: number): string {
+  if (optionCount <= 1) return "回复“选 1”确认。";
+  const options = Array.from({ length: optionCount }, (_, index) => index + 1).join("/");
+  return `回复“选 ${options}”确认。`;
 }
 
 // 从做梦候选中挑出可交给排程推荐的事项；只读转换，不查日历、不写日历。
