@@ -2620,6 +2620,34 @@ describe("handleCalendarAgentRequest", () => {
     });
   });
 
+  it("repairs next-week weekday dates even when the wrong model date has the same weekday", async () => {
+    const calendar = createFakeCalendar();
+
+    const result = await handleCalendarAgentRequest({
+      text: "下周一的下午 4:00 提醒我，问一下肖博，木奇那边聊得怎么样",
+      requestId: "req_next_week_monday_same_weekday_repair",
+      now: "2026-05-17T09:00:00+08:00",
+      timezone: "Asia/Shanghai",
+      state: createShortTermStateStore(),
+      decisionClient: decisionClient({
+        action: "create_event",
+        event: {
+          title: "问一下肖博，木奇那边聊得怎么样",
+          date: "2026-05-25",
+          startTime: "16:00",
+        },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_next_week_monday_same_weekday_repair" });
+    expect(result.reply).toContain("2026年5月18日 星期一");
+    await expect(calendar.listEvents({ date: "2026-05-18" })).resolves.toMatchObject({
+      ok: true,
+      data: [{ id: "evt_1", title: "问一下肖博，木奇那边聊得怎么样", start: "2026-05-18 16:00" }],
+    });
+  });
+
   it("repairs batch creation when model dates conflict with explicit weekdays in the user text", async () => {
     const calendar = createFakeCalendar();
     let createCalls = 0;

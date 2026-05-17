@@ -64,16 +64,32 @@ export function normalizeExplicitWeekdayCreateDates(input: {
   if (mentions.length !== events.length) return { ok: true, action: input.action };
 
   const repairedEvents: EventDraft[] = [];
+  const hasExplicitDate = hasExplicitCalendarDate(input.text);
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     const expected = mentions[index];
     const actualWeekday = weekdayForDate(event.date);
+    const shouldNormalizeRelativeWeekday = !hasExplicitDate && (!expected.modifier || expected.modifier === "下");
+    if (shouldNormalizeRelativeWeekday) {
+      const repairedDate = resolveWeekdayDate({
+        weekday: expected.weekday,
+        modifier: expected.modifier,
+        startTime: event.startTime,
+        now: input.now,
+        timezone: input.timezone,
+      });
+      if (repairedDate) {
+        repairedEvents.push(event.date === repairedDate ? event : { ...event, date: repairedDate });
+        continue;
+      }
+    }
+
     if (actualWeekday === undefined || actualWeekday === expected.weekday) {
       repairedEvents.push(event);
       continue;
     }
 
-    if (hasExplicitCalendarDate(input.text) || (expected.modifier && expected.modifier !== "下")) {
+    if (hasExplicitDate || (expected.modifier && expected.modifier !== "下")) {
       return weekdayMismatch(index, expected, event.date, actualWeekday);
     }
 
