@@ -10,6 +10,8 @@ import type {
   FeishuTransportRequest,
 } from "./types.js";
 
+const DELETE_RATE_LIMIT_RETRY_DELAY_MS = 250;
+
 // 创建飞书日历 client，调用方决定传 fake transport 还是真实 transport。
 export function createFeishuCalendarClient(input: CreateFeishuCalendarClientInput): FeishuCalendarClient {
   const basePath = `/open-apis/calendar/v4/calendars/${input.config.calendarId}/events`;
@@ -141,15 +143,25 @@ async function requestFeishuDelete(
   request: FeishuTransportRequest,
   eventId: string,
 ): Promise<FeishuResult<DeleteEventResult>> {
-  const response = await send(input, request);
-  if (!response.ok) return response;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await send(input, request);
+    if (!response.ok) return response;
 
-  if (isAlreadyDeletedError(response.data.body)) return { ok: true, data: { eventId } };
+    if (isAlreadyDeletedError(response.data.body)) return { ok: true, data: { eventId } };
 
-  const apiError = normalizeApiError(response.data.status, response.data.body);
-  if (apiError) return apiError;
+    const apiError = normalizeApiError(response.data.status, response.data.body);
+    if (apiError) {
+      if (attempt === 0 && isRateLimitResponse(response.data.status, response.data.body)) {
+        await sleep(DELETE_RATE_LIMIT_RETRY_DELAY_MS);
+        continue;
+      }
+      return apiError;
+    }
 
-  return { ok: true, data: { eventId } };
+    return { ok: true, data: { eventId } };
+  }
+
+  return { ok: false, code: "api_error", message: "飞书日历 API 返回错误：current operation rate limited" };
 }
 
 // 调用注入式 transport，并把抛出的异常转成稳定错误。
@@ -227,6 +239,15 @@ function isActiveEvent(value: unknown): boolean {
 // 清理流程里重复删除已删事件应视为幂等成功。
 function isAlreadyDeletedError(body: unknown): boolean {
   return readApiMessage(body).toLowerCase().includes("event is deleted");
+}
+
+// 飞书偶发操作限流是外部瞬时状态，删除请求可以短暂重试一次。
+function isRateLimitResponse(status: number, body: unknown): boolean {
+  return status === 429 || readApiMessage(body).toLowerCase().includes("rate limited");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // 读取飞书业务 code。

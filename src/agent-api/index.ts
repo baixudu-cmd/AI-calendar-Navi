@@ -820,7 +820,7 @@ async function executeDeleteConfirmation(
     const selection = selectPendingBatchDeleteItems(pendingDelete, itemNumbers);
     if (!selection.ok) return { ok: false, reply: `没有成功：${selection.message}` };
     const result = await deleteManyEvents(calendar, { eventIds: selection.eventIds, confirmed: true });
-    if (!result.ok) return { ok: false, reply: `没有成功：${result.message}` };
+    if (!result.ok) return { ok: false, reply: formatDeleteExecutionFailure(result.message, formatPendingDeleteItemsForReply(selection.items)) };
 
     clearDeletedState(state, result.data.deletedEventIds);
     return { ok: true, reply: `已删除 ${result.data.deletedEventIds.length} 个日程：\n${formatPendingDeleteItemsForReply(selection.items)}` };
@@ -831,10 +831,22 @@ async function executeDeleteConfirmation(
   }
 
   const result = await deleteEvent(calendar, { eventId: pendingDelete.eventId });
-  if (!result.ok) return { ok: false, reply: `没有成功：${result.message}` };
+  if (!result.ok) return { ok: false, reply: formatDeleteExecutionFailure(result.message, formatPendingDeleteForReply(pendingDelete)) };
 
   clearDeletedState(state, [pendingDelete.eventId]);
   return { ok: true, reply: `已删除日程：\n${formatPendingDeleteForReply(pendingDelete)}` };
+}
+
+function formatDeleteExecutionFailure(message: string, pendingText: string): string {
+  if (isRateLimitedCalendarFailure(message)) {
+    return `飞书现在限流，刚才这个删除还保留着：\n${pendingText}\n稍后再回复确认删除，我会继续处理。`;
+  }
+
+  return `没有成功：${message}`;
+}
+
+function isRateLimitedCalendarFailure(message: string): boolean {
+  return message.toLowerCase().includes("rate limited");
 }
 
 function selectPendingBatchDeleteItems(

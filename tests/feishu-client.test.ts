@@ -264,6 +264,29 @@ describe("Feishu calendar client", () => {
     });
   });
 
+  it("retries delete once when Feishu reports operation rate limit", async () => {
+    const requests: FeishuTransportRequest[] = [];
+    const client = createFeishuCalendarClient({
+      config: { appId: "app", appSecret: "secret", calendarId: "primary", timezone: "Asia/Shanghai" },
+      tenantAccessToken: "token",
+      transport: {
+        request: async (request) => {
+          requests.push(request);
+          if (requests.length === 1) {
+            return { status: 429, body: { code: 999, msg: "current operation rate limited" } };
+          }
+          return { status: 200, body: { code: 0 } };
+        },
+      },
+    });
+
+    await expect(client.deleteEvent({ eventId: "evt_rate_limited" })).resolves.toEqual({
+      ok: true,
+      data: { eventId: "evt_rate_limited" },
+    });
+    expect(requests).toHaveLength(2);
+  });
+
   it("treats already deleted events as successful delete cleanup", async () => {
     const client = createFeishuCalendarClient({
       config: { appId: "app", appSecret: "secret", calendarId: "primary", timezone: "Asia/Shanghai" },

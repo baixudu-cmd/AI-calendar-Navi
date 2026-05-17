@@ -2979,6 +2979,39 @@ describe("handleCalendarAgentRequest", () => {
     expect(state.snapshot().pending_delete).toEqual({ eventId: "evt_real", title: "电话会", source: "last_event" });
   });
 
+  it("keeps pending delete state and gives retry guidance when Feishu delete is rate limited", async () => {
+    const state = createShortTermStateStore({
+      pending_delete: { eventId: "evt_real", title: "电话会", source: "last_event", date: "2026-05-09", startTime: "10:00" },
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "确认删除",
+      requestId: "req_delete_confirm_rate_limited",
+      state,
+      decisionClient: decisionClient({ type: "confirm_delete", confirmed: true }),
+      calendar: {
+        ...createFakeCalendar(),
+        deleteEvent: async () => ({
+          ok: false,
+          code: "api_error",
+          message: "飞书日历 API 返回错误：current operation rate limited",
+        }),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, actionType: "confirm_delete", requestId: "req_delete_confirm_rate_limited" });
+    expect(result.reply).toContain("飞书现在限流");
+    expect(result.reply).toContain("稍后再回复确认删除");
+    expect(result.reply).toContain("电话会");
+    expect(state.snapshot().pending_delete).toEqual({
+      eventId: "evt_real",
+      title: "电话会",
+      source: "last_event",
+      date: "2026-05-09",
+      startTime: "10:00",
+    });
+  });
+
   it("does not write pending delete when last_event is missing", async () => {
     const state = createShortTermStateStore();
 
