@@ -202,25 +202,25 @@ describe("proactive briefing and reminder", () => {
     });
   });
 
-  it("builds reminders only for unsent events inside the 40-minute lead window by default", async () => {
-    const store = createMemoryProactiveMessageStore(["reminder:2026-05-14:evt_sent:2026-05-14 08:50"]);
+  it("does not send reminder messages from the legacy proactive briefing path", async () => {
+    const store = createMemoryProactiveMessageStore();
     const result = await runProactiveBriefing({
       mode: "reminder",
       today: "2026-05-14",
       now: "2026-05-14T08:20:00+08:00",
-      calendar: createCalendar([
-        { id: "evt_sent", title: "已提醒会议", start: "2026-05-14 08:50" },
-        { id: "evt_due", title: "投委会", start: "2026-05-14 09:00" },
-        { id: "evt_late", title: "客户电话", start: "2026-05-14 10:30" },
-      ]),
+      calendar: createCalendar([{ id: "evt_due", title: "投委会", start: "2026-05-14 09:00" }]),
       store,
       commit: true,
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.sent).toBe(true);
-    expect(result.message).toBe("日程提醒｜2026年5月14日 星期四\n40 分钟内：2026年5月14日 星期四 09:00 投委会");
-    await expect(store.hasSent("reminder:2026-05-14:evt_due:2026-05-14 09:00")).resolves.toBe(true);
+    expect(result).toEqual({
+      ok: true,
+      mode: "reminder",
+      sent: false,
+      skippedReason: "no_events",
+      message: "微信提醒由提醒队列 dispatcher 处理，旧主动提醒入口不发送。",
+    });
+    await expect(store.hasSent("reminder:2026-05-14:evt_due:2026-05-14 09:00")).resolves.toBe(false);
   });
 
   it("prints a concise report", async () => {

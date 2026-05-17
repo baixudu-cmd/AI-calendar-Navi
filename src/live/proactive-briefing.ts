@@ -150,38 +150,14 @@ function formatPendingContextSection(state: ShortTermState | undefined): string 
 }
 
 async function runReminder(input: ProactiveBriefingInput): Promise<ProactiveBriefingResult> {
-  const leadMinutes = input.reminderLeadMinutes ?? 40;
-  const listed = await input.calendar.listEvents({ date: input.today });
-  if (!listed.ok) return { ok: false, mode: "reminder", sent: false, message: `没有发送成功：${listed.message}` };
-
-  const due = sortEventsByStart(listed.data)
-    .map((event) => ({ event, startsInMinutes: minutesUntil(input.now, event.start) }))
-    .filter((item) => item.startsInMinutes >= 0 && item.startsInMinutes <= leadMinutes);
-  const unsent: Array<{ event: FeishuCalendarEvent; key: string }> = [];
-
-  for (const item of due) {
-    const key = `reminder:${input.today}:${item.event.id}:${item.event.start}`;
-    if (!(await input.store.hasSent(key))) unsent.push({ event: item.event, key });
-  }
-
-  if (unsent.length === 0) {
-    return { ok: true, mode: "reminder", sent: false, skippedReason: "no_events", message: "没有需要主动发送的日程。" };
-  }
-
-  const message = [
-    `日程提醒｜${formatCalendarDateLabel(input.today)}`,
-    ...unsent.map((item) => `${leadMinutes} 分钟内：${formatCalendarEventLine(item.event, 0, { fallbackDate: input.today }).replace(/^0\. /, "")}`),
-  ].join("\n");
-
-  const key = unsent.map((item) => item.key).join(",");
-  const delivery = await deliverProactiveMessage(input, { key, message, mode: "reminder" });
-  if (!delivery.ok) return { ok: false, mode: "reminder", sent: false, deliveryMode: delivery.mode, message: `没有发送成功：${delivery.message}` };
-
-  if (input.commit) {
-    for (const item of unsent) await input.store.markSent(item.key);
-  }
-
-  return { ok: true, mode: "reminder", sent: true, key, message, deliveryMode: delivery.mode };
+  void input;
+  return {
+    ok: true,
+    mode: "reminder",
+    sent: false,
+    skippedReason: "no_events",
+    message: "微信提醒由提醒队列 dispatcher 处理，旧主动提醒入口不发送。",
+  };
 }
 
 async function deliverProactiveMessage(
@@ -202,13 +178,6 @@ async function readSentKeys(filePath: string): Promise<Set<string>> {
     if (code === "ENOENT") return new Set();
     throw error;
   }
-}
-
-function minutesUntil(nowText: string, startText: string | undefined): number {
-  const now = Date.parse(nowText);
-  const start = parseCalendarStart(startText);
-  if (!Number.isFinite(now) || !Number.isFinite(start)) return Number.POSITIVE_INFINITY;
-  return Math.floor((start - now) / 60000);
 }
 
 function parseCalendarStart(startText: string | undefined): number {
