@@ -310,6 +310,26 @@ describe("validateToolCall", () => {
     });
   });
 
+  it("rejects date-only evidence when the model invents a start time", () => {
+    expect(
+      validateToolCall(
+        {
+          toolName: "calendar.create_event",
+          arguments: {
+            title: "和产品聊一下",
+            date: "2026-05-09",
+            startTime: "09:00",
+            startTimeEvidence: "明天",
+          },
+        },
+        { sourceText: "明天和产品聊一下" },
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: "guard_rejected",
+    });
+  });
+
   it("accepts canonical start time evidence when the source has equivalent spoken times", () => {
     expect(
       validateToolCall(
@@ -716,6 +736,34 @@ describe("validateToolCall", () => {
     });
   });
 
+  it("normalizes explicit multi-reminder values in schedule tools", () => {
+    const proposal = validateToolCall({
+      toolName: "calendar.propose_schedule",
+      arguments: { date: "2026-05-12", items: [{ title: "看材料", reminderMinutes: [10, 120, 40, 120, 5] }] },
+    });
+
+    expect(proposal).toEqual({
+      ok: true,
+      call: {
+        toolName: "calendar.propose_schedule",
+        arguments: { date: "2026-05-12", items: [{ title: "看材料", reminderMinutes: [120, 40, 10] }] },
+      },
+    });
+
+    const confirmation = validateToolCall({
+      toolName: "calendar.confirm_schedule",
+      arguments: { confirmed: true, itemChanges: [{ itemNumber: 1, reminderMinutes: [10, 120, 40, 120, 5] }] },
+    });
+
+    expect(confirmation).toEqual({
+      ok: true,
+      call: {
+        toolName: "calendar.confirm_schedule",
+        arguments: { confirmed: true, itemChanges: [{ itemNumber: 1, reminderMinutes: [120, 40, 10] }] },
+      },
+    });
+  });
+
   it("accepts schedule proposal without explicit items for memory candidates", () => {
     const proposal = validateToolCall({
       toolName: "calendar.propose_schedule",
@@ -783,7 +831,7 @@ describe("validateToolCall", () => {
     }
   });
 
-  it("accepts manage_todos for inbox list, completion, deletion, and update", () => {
+  it("accepts manage_todos for inbox list, completion, deletion, shelve, and update", () => {
     const list = validateToolCall({
       toolName: "assistant.manage_todos",
       arguments: { operation: "list", limit: 3 },
@@ -827,6 +875,42 @@ describe("validateToolCall", () => {
     });
     if (batchComplete.ok) {
       expect(toolCallToCalendarAction(batchComplete.call)).toEqual({ type: "manage_todos", operation: "complete", target: { itemNumbers: [1, 3] } });
+    }
+
+    const shelve = validateToolCall({
+      toolName: "assistant.manage_todos",
+      arguments: { operation: "shelve", target: { itemNumber: 1 } },
+    });
+    expect(shelve).toEqual({
+      ok: true,
+      call: { toolName: "assistant.manage_todos", arguments: { operation: "shelve", target: { itemNumber: 1 } } },
+    });
+    if (shelve.ok) {
+      expect(toolCallToCalendarAction(shelve.call)).toEqual({ type: "manage_todos", operation: "shelve", target: { itemNumber: 1 } });
+    }
+
+    const listShelved = validateToolCall({
+      toolName: "assistant.manage_todos",
+      arguments: { operation: "list_shelved" },
+    });
+    expect(listShelved).toEqual({
+      ok: true,
+      call: { toolName: "assistant.manage_todos", arguments: { operation: "list_shelved" } },
+    });
+    if (listShelved.ok) {
+      expect(toolCallToCalendarAction(listShelved.call)).toEqual({ type: "manage_todos", operation: "list_shelved" });
+    }
+
+    const restore = validateToolCall({
+      toolName: "assistant.manage_todos",
+      arguments: { operation: "restore", target: { itemNumber: 1 } },
+    });
+    expect(restore).toEqual({
+      ok: true,
+      call: { toolName: "assistant.manage_todos", arguments: { operation: "restore", target: { itemNumber: 1 } } },
+    });
+    if (restore.ok) {
+      expect(toolCallToCalendarAction(restore.call)).toEqual({ type: "manage_todos", operation: "restore", target: { itemNumber: 1 } });
     }
 
     const update = validateToolCall({

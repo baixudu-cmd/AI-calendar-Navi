@@ -244,10 +244,10 @@ function compareFinalEvents(
 
 function compareFinalEvent(expected: AdvancedFinalEventExpectation, actual: StoredEvent): string | null {
   const expectedTitles = expected.titles || [expected.title];
-  if (!expectedTitles.includes(actual.title)) return `final title mismatch for ${expected.id}`;
-  if (actual.date !== expected.date) return `final date mismatch for ${expected.id}`;
+  if (!expectedTitles.includes(actual.title)) return `final title mismatch for ${expected.id}: ${actual.title}`;
+  if (actual.date !== expected.date) return `final date mismatch for ${expected.id}: ${actual.date}`;
   const expectedStartTimes = expected.startTimes || [expected.startTime];
-  if (!expectedStartTimes.includes(actual.startTime)) return `final startTime mismatch for ${expected.id}`;
+  if (!expectedStartTimes.includes(actual.startTime)) return `final startTime mismatch for ${expected.id}: ${actual.startTime}`;
   return null;
 }
 

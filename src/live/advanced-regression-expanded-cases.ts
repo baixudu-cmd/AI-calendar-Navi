@@ -192,7 +192,7 @@ function expandedScheduleContextScenarios(): AdvancedRegressionScenario[] {
 // 覆盖更多没有时间的自然事项自动接住并安排。
 function expandedTodoAutoScheduleScenarios(): AdvancedRegressionScenario[] {
   return [
-    todoAuto("003", "把财务口径弄完", "财务口径", ["财务口径", "把财务口径弄完", "财务口径这件事"]),
+    todoAuto("003", "把财务口径弄完", "财务口径", ["财务口径", "把财务口径弄完", "财务口径弄完", "弄完财务口径", "财务口径这件事"]),
     todoAuto("004", "DCF模型先处理一下", "DCF 模型", ["DCF 模型", "DCF模型", "DCF 模型处理"]),
     todoAuto("005", "帮我把写邮件搞定", "写邮件"),
     todoAuto("006", "处理一下收购清单", "收购清单", ["收购清单", "处理收购清单"]),
@@ -308,7 +308,7 @@ function todoAuto(id: string, text: string, title: string, titles?: string[]): A
 function todoInbox(
   id: string,
   text: string,
-  operation: "list" | "complete" | "delete" | "update",
+  operation: "list" | "list_shelved" | "complete" | "delete" | "shelve" | "restore" | "update",
   seedItems: SeedLiteItem[],
   expectedReplyIncludes: string[],
   expectedFinalSeedItems: AdvancedFinalSeedExpectation[],

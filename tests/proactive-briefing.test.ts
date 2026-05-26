@@ -78,9 +78,56 @@ describe("proactive briefing and reminder", () => {
     });
 
     if (!result.sent) throw new Error("expected briefing to be sent");
-    expect(result.message).toBe(
-      "早报｜2026年5月14日 星期四\n1. 2026年5月14日 星期四 09:00 投委会\n待推进收件箱：\n1. 整理路演材料",
-    );
+    expect(result.message).toContain("早报｜2026年5月14日 星期四");
+    expect(result.message).toContain("1. 2026年5月14日 星期四 09:00 投委会");
+    expect(result.message).toContain("待处理工作台：");
+    expect(result.message).toContain("我现在帮你盯着 1 件事");
+    expect(result.message).toContain("待推进：");
+    expect(result.message).toContain("整理路演材料");
+    expect(result.message).toContain("第几个完成了");
+  });
+
+  it("gently pulls back overdue watchlist items in proactive daily briefings", async () => {
+    const result = await runProactiveBriefing({
+      mode: "morning",
+      today: "2026-05-14",
+      now: "2026-05-14T08:30:00+08:00",
+      calendar: createCalendar([]),
+      store: createMemoryProactiveMessageStore(),
+      seedStore: createMemorySeedLiteStore([
+        { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" },
+      ]),
+    });
+
+    if (!result.sent) throw new Error("expected briefing to be sent");
+    expect(result.message).toContain("温和拉回：整理材料 已过原定时间");
+    expect(result.message).toContain("可以在对应分组里说“待安排里的第几个今天下午”");
+    expect(result.message).not.toContain("可以回“今天下午处理”“先不管”或“完成了”");
+  });
+
+  it("records proactive pullback progress and shelves stale overdue items", async () => {
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" },
+      { seedId: "seed_2", title: "复盘设置", targetDate: "2026-05-12", pullbackCount: 2, lastPullbackAt: "2026-05-15" },
+    ]);
+
+    const result = await runProactiveBriefing({
+      mode: "morning",
+      today: "2026-05-16",
+      now: "2026-05-16T08:30:00+08:00",
+      calendar: createCalendar([]),
+      store: createMemoryProactiveMessageStore(),
+      seedStore,
+    });
+
+    if (!result.sent) throw new Error("expected briefing to be sent");
+    expect(result.message).toContain("温和拉回：整理材料 已过原定时间");
+    expect(result.message).not.toContain("温和拉回：复盘设置");
+    expect(result.message).toContain("搁置区还有 1 件");
+    await expect(seedStore.list()).resolves.toMatchObject([
+      { seedId: "seed_1", title: "整理材料", pullbackCount: 1, lastPullbackAt: "2026-05-16" },
+      { seedId: "seed_2", title: "复盘设置", status: "shelved", pullbackCount: 2, lastPullbackAt: "2026-05-15" },
+    ]);
   });
 
   it("sends proactive daily briefings when only Seed Lite items exist", async () => {
@@ -99,8 +146,12 @@ describe("proactive briefing and reminder", () => {
       sent: true,
       key: "briefing:evening:2026-05-15",
       deliveryMode: undefined,
-      message: "晚报｜2026年5月15日 星期五\n待推进收件箱：\n1. 整理路演材料",
+      message: expect.stringContaining("晚报｜2026年5月15日 星期五\n待处理工作台：\n我现在帮你盯着 1 件事"),
     });
+    if (result.sent) {
+      expect(result.message).toContain("待推进：");
+      expect(result.message).toContain("整理路演材料");
+    }
   });
 
   it("adds pending schedule context to proactive daily briefings", async () => {
@@ -137,8 +188,13 @@ describe("proactive briefing and reminder", () => {
       sent: true,
       key: "briefing:morning:2026-05-14",
       deliveryMode: undefined,
-      message: "早报｜2026年5月14日 星期四\n待处理上下文：\n- 待确认推荐：拿币（2026-05-14 15:00）",
+      message: expect.stringContaining("早报｜2026年5月14日 星期四\n待处理工作台：\n我现在帮你盯着 1 件事"),
     });
+    if (result.sent) {
+      expect(result.message).toContain("待确认：");
+      expect(result.message).toContain("排程推荐：拿币（2026-05-14 15:00）");
+      expect(result.message).toContain("待确认里的排程推荐可以说“确认第 1 个推荐位”");
+    }
   });
 
   it("keeps empty proactive briefings silent", async () => {

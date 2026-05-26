@@ -38,6 +38,7 @@ describe("state guard", () => {
                 startTime: "11:00",
                 endTime: "12:00",
                 durationMinutes: 60,
+                confidence: 0.42,
                 eventId: "evt_model_should_not_set",
               },
             ],
@@ -52,7 +53,7 @@ describe("state guard", () => {
         options: [
           {
             optionNumber: 1,
-            items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "11:00", endTime: "12:00", durationMinutes: 60 }],
+            items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "11:00", endTime: "12:00", durationMinutes: 60, confidence: 0.42 }],
           },
         ],
       },

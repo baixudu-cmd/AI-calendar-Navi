@@ -8,6 +8,8 @@ export type ProactiveRuntimeDoctorInput = {
   proactiveWechatAccountId?: string;
   proactiveWechatTarget?: string;
   weixinContextTokensJson?: string;
+  weixinContextTokensUpdatedAt?: string;
+  now?: string;
 };
 
 export type ProactiveRuntimeDoctorResult = {
@@ -102,7 +104,11 @@ function checkWeixinContextToken(input: ProactiveRuntimeDoctorInput): { details:
     if (!isRecord(parsed)) return { details: [], failures: ["OpenClaw Weixin context token 快照格式不正确。"] };
 
     const knownTargets = Object.keys(parsed).filter((key) => typeof parsed[key] === "string" && String(parsed[key]).length > 0);
-    if (knownTargets.includes(target)) return { details: ["微信主动发送目标已匹配 context token。"], failures: [] };
+    if (knownTargets.includes(target)) {
+      const freshness = checkContextTokenFreshness(input);
+      if (!freshness.ok) return { details: [], failures: [freshness.message] };
+      return { details: ["微信主动发送目标已匹配 context token。"], failures: [] };
+    }
 
     const caseOnlyMatch = knownTargets.find((key) => key.toLowerCase() === target.toLowerCase());
     if (caseOnlyMatch) {
@@ -113,6 +119,21 @@ function checkWeixinContextToken(input: ProactiveRuntimeDoctorInput): { details:
   } catch {
     return { details: [], failures: ["OpenClaw Weixin context token 快照解析失败。"] };
   }
+}
+
+function checkContextTokenFreshness(input: ProactiveRuntimeDoctorInput): { ok: true } | { ok: false; message: string } {
+  if (!input.weixinContextTokensUpdatedAt) return { ok: true };
+
+  const updatedAt = Date.parse(input.weixinContextTokensUpdatedAt);
+  const now = Date.parse(input.now || new Date().toISOString());
+  if (!Number.isFinite(updatedAt) || !Number.isFinite(now)) return { ok: true };
+
+  const ageHours = (now - updatedAt) / 1000 / 60 / 60;
+  if (ageHours > 36) {
+    return { ok: false, message: "微信主动发送 context token 已超过 36 小时未刷新，可能无法可见送达。" };
+  }
+
+  return { ok: true };
 }
 
 function readPayloadMessage(job: Record<string, unknown>): string {

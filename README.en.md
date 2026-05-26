@@ -144,6 +144,9 @@ Safe to publish:
 - README / ARCHITECTURE / PUBLICATION
 - `.env.example`
 - `config/settings.example.json`
+- placeholder examples under `ops/launchagents/`
+- `scripts/run-memory-dream-launchagent.sh`
+- `scripts/run-proactive-launchagent.sh`
 - public docs and GitHub issue templates
 
 Keep private:

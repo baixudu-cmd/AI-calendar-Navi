@@ -15,8 +15,8 @@ describe("scheduler memory dream bridge", () => {
     ];
 
     expect(selectScheduleItemsFromMemoryDream(entries)).toEqual([
-      { title: "看 DCF 模型", sourceIds: ["src_2"] },
-      { title: "整理投委会材料", sourceIds: ["src_1"] },
+      { title: "看 DCF 模型", sourceIds: ["src_2"], confidence: 0.86 },
+      { title: "整理投委会材料", sourceIds: ["src_1"], confidence: 0.72 },
     ]);
   });
 
@@ -25,11 +25,23 @@ describe("scheduler memory dream bridge", () => {
       dreamEntry("mem_1", "schedule_candidate", "排程候选：整理材料", "candidate", 0.72, {
         targetDate: "2026-05-16",
         durationMinutes: 90,
+        preferredReminderMinutes: [0],
+        reasonCodes: ["seed_target_date", "seed_reminder_time"],
       }),
     ];
 
     expect(selectScheduleItemsFromMemoryDream(entries)).toEqual([
-      { title: "整理材料", sourceIds: ["src_1"], date: "2026-05-16", durationMinutes: 90 },
+      { title: "整理材料", sourceIds: ["src_1"], confidence: 0.72, date: "2026-05-16", durationMinutes: 90, reminderMinutes: 0, reasonCodes: ["seed_target_date", "seed_reminder_time"] },
+    ]);
+  });
+
+  it("keeps dream candidate confidence on proposal items", () => {
+    const entries: MemoryDreamEntry[] = [
+      dreamEntry("mem_1", "schedule_candidate", "排程候选：整理材料", "candidate", 0.42),
+    ];
+
+    expect(selectScheduleItemsFromMemoryDream(entries)).toEqual([
+      { title: "整理材料", sourceIds: ["src_1"], confidence: 0.42 },
     ]);
   });
 
@@ -74,6 +86,19 @@ describe("scheduler memory dream bridge", () => {
     });
   });
 
+  it("keeps multi-reminder schedule preferences bounded and ordered", () => {
+    const entries: MemoryDreamEntry[] = [
+      dreamEntry("mem_1", "preference_candidate", "排程偏好：重要事项多提醒", "stable", 0.8, {
+        preferredReminderMinutes: [10, 120, 40, 120, 5],
+      }),
+    ];
+
+    expect(selectSchedulePreferencesFromMemoryDream(entries)).toEqual({
+      preferredStartTimes: [],
+      preferredReminderMinutes: [120, 40, 10],
+    });
+  });
+
   it("uses personal schedule preferences to order recommendations", async () => {
     const result = await proposeSchedule({
       calendar: emptyCalendar(),
@@ -90,6 +115,23 @@ describe("scheduler memory dream bridge", () => {
           { optionNumber: 1, items: [{ title: "整理材料", startTime: "11:00" }] },
           { optionNumber: 2, items: [{ title: "整理材料", startTime: "09:00" }] },
         ],
+      },
+    });
+  });
+
+  it("applies reminder preferences to schedule candidates without explicit reminders", async () => {
+    const result = await proposeSchedule({
+      calendar: emptyCalendar(),
+      date: "2026-05-14",
+      items: [{ title: "整理材料" }],
+      optionCount: 1,
+      preferences: { preferredReminderMinutes: [120, 40] },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      pendingSchedule: {
+        options: [{ optionNumber: 1, items: [{ title: "整理材料", reminderMinutes: [120, 40] }] }],
       },
     });
   });
@@ -154,19 +196,33 @@ describe("scheduler memory dream bridge", () => {
     const result = await proposeSchedule({
       calendar: emptyCalendar(),
       date: "2026-05-14",
-      items: [{ title: "整理材料" }],
+      items: [{ title: "整理材料", reasonCodes: ["seed_target_date", "seed_reminder_time"] }],
       optionCount: 1,
       preferences: { preferredStartTimes: ["11:00"] },
     });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("原因：这段时间没有冲突");
+      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("原因：来自待推进目标日期和提醒时间，且这段时间没有冲突");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("共 1 个候选");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("确认前不会写入日历");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("\n1. 2026-05-14 11:00 整理材料");
       expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("回复“选 1”确认。");
       expect(formatScheduleProposalReply(result.pendingSchedule)).not.toContain("第一个改到 11 点");
+    }
+  });
+
+  it("shows a cautious confidence line for low-confidence schedule recommendations", async () => {
+    const result = await proposeSchedule({
+      calendar: emptyCalendar(),
+      date: "2026-05-14",
+      items: [{ title: "整理材料", confidence: 0.42 }],
+      optionCount: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(formatScheduleProposalReply(result.pendingSchedule)).toContain("把握：偏低，我先给候选，确认前不会写入日历");
     }
   });
 });

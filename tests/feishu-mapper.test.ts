@@ -39,6 +39,31 @@ describe("Feishu calendar mapper", () => {
     ).toEqual({ timestamp: "1778313600", timezone: "Asia/Shanghai" });
   });
 
+  it("defaults created events to a 40-minute Feishu reminder", () => {
+    expect(
+      mapCreateEventPayload({
+        title: "见张总",
+        date: "2026-05-09",
+        startTime: "15:00",
+      }),
+    ).toMatchObject({
+      reminders: [{ minutes: 40 }],
+    });
+  });
+
+  it("clears Feishu reminders when a created event explicitly disables reminders", () => {
+    expect(
+      mapCreateEventPayload({
+        title: "见张总",
+        date: "2026-05-09",
+        startTime: "15:00",
+        reminderMinutes: 0,
+      }),
+    ).toMatchObject({
+      reminders: [],
+    });
+  });
+
   it("keeps default one-hour end time after the start time across midnight", () => {
     const payload = mapCreateEventPayload({
       title: "夜间电话会",
@@ -64,6 +89,21 @@ describe("Feishu calendar mapper", () => {
     expect(mapUpdateEventPayload({ date: "2026-05-09", startTime: "16:30", location: "会议室 A" })).toEqual({
       start_time: { timestamp: "1778315400", timezone: "Asia/Shanghai" },
       location: { name: "会议室 A" },
+    });
+  });
+
+  it("clears Feishu reminders when update patch disables reminders", () => {
+    expect(mapUpdateEventPayload({ reminderMinutes: 0 })).toEqual({
+      reminders: [],
+    });
+  });
+
+  it("keeps at most three explicit Feishu reminders for important events", () => {
+    expect(mapCreateEventPayload({ title: "重要会议", date: "2026-05-09", startTime: "15:00", reminderMinutes: [10, 120, 40, 120, 5] })).toMatchObject({
+      reminders: [{ minutes: 120 }, { minutes: 40 }, { minutes: 10 }],
+    });
+    expect(mapUpdateEventPayload({ reminderMinutes: [10, 120, 40, 120, 5] })).toEqual({
+      reminders: [{ minutes: 120 }, { minutes: 40 }, { minutes: 10 }],
     });
   });
 });

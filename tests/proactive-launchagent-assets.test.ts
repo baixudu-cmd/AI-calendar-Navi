@@ -45,4 +45,11 @@ describe("proactive LaunchAgent assets", () => {
     expect(script).not.toContain("push-weixin-calendar.mjs");
     expect(script).not.toContain(`${"tracklog"}-${"agent"}`);
   });
+
+  it("checks WeChat reminders frequently enough to stay close to the configured lead time", () => {
+    const reminderPlist = fs.readFileSync(path.join(launchAgentDir, "com.navi-calendar.proactive-reminder.plist"), "utf8");
+
+    expect(reminderPlist).toContain("<key>StartInterval</key>");
+    expect(reminderPlist).toContain("<integer>60</integer>");
+  });
 });

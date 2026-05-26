@@ -10,6 +10,8 @@ import type { PendingScheduleItemState, PendingScheduleState } from "../state/in
 export type ScheduleProposalItemInput = {
   title: string;
   sourceIds?: string[];
+  reasonCodes?: string[];
+  confidence?: number;
   date?: string;
   durationMinutes?: number;
   location?: string;
@@ -54,6 +56,7 @@ export type SelectScheduleItemsFromMemoryDreamOptions = {
 export type SchedulePreferences = {
   preferredStartTimes?: string[];
   preferredWindows?: SchedulePreferredWindow[];
+  preferredReminderMinutes?: number[];
 };
 
 const WORKDAY_START_MINUTE = 9 * 60;
@@ -65,7 +68,7 @@ const DEFAULT_OPTION_COUNT = 3;
 // 基于当天已有日程生成可选择的推荐位；不执行任何写入。
 export async function proposeSchedule(input: ScheduleProposalInput): Promise<{ ok: true; pendingSchedule: PendingScheduleState } | { ok: false; message: string }> {
   if (!isValidDate(input.date)) return { ok: false, message: "排程需要明确日期。" };
-  const items = input.items.map(normalizeProposalItem).filter((item): item is RequiredScheduleProposalItem => Boolean(item));
+  const items = input.items.map((item) => normalizeProposalItem(item, input.preferences)).filter((item): item is RequiredScheduleProposalItem => Boolean(item));
   if (items.length === 0) return { ok: false, message: "排程需要至少一个事项。" };
   if (items.length > 5) return { ok: false, message: "一次最多安排 5 个事项。" };
 
@@ -129,12 +132,42 @@ export function formatScheduleProposalReply(pendingSchedule: PendingScheduleStat
   const options = pendingSchedule.options.map((option) => {
     if (option.items.length === 1) {
       const item = option.items[0];
-      return `${option.optionNumber}. ${item.date} ${item.startTime} ${item.title}\n   原因：这段时间没有冲突`;
+      return `${option.optionNumber}. ${item.date} ${item.startTime} ${item.title}\n   原因：${formatScheduleReason(item.reasonCodes)}${formatScheduleConfidenceLine([item])}`;
     }
     const lines = option.items.map((item) => `   - 事项 ${item.itemNumber}：${item.date} ${item.startTime} ${item.title}`);
-    return `${option.optionNumber}. 推荐方案\n   原因：这段时间没有冲突\n${lines.join("\n")}`;
+    return `${option.optionNumber}. 推荐方案\n   原因：${formatScheduleReason(option.items.flatMap((item) => item.reasonCodes || []))}${formatScheduleConfidenceLine(option.items)}\n${lines.join("\n")}`;
   });
   return `我找到这些可选时间（共 ${pendingSchedule.options.length} 个候选，确认前不会写入日历）：\n${options.join("\n")}\n${formatScheduleSelectionHint(pendingSchedule.options.length)}`;
+}
+
+function formatScheduleConfidenceLine(items: PendingScheduleItemState[]): string {
+  const confidences = items.map((item) => item.confidence).filter((item): item is number => typeof item === "number");
+  if (confidences.length === 0) return "";
+  const confidence = Math.min(...confidences);
+  if (confidence >= 0.75) return "\n   把握：较高，可以直接选合适的候选";
+  if (confidence >= 0.5) return "\n   把握：中等，可以从候选里选一个";
+  return "\n   把握：偏低，我先给候选，确认前不会写入日历";
+}
+
+function formatScheduleReason(reasonCodes: string[] | undefined): string {
+  const reasons = uniqueStrings((reasonCodes || []).map(formatReasonCode).filter((item): item is string => Boolean(item)));
+  if (reasons.length === 0) return "这段时间没有冲突";
+  return `来自${joinChineseList(reasons)}，且这段时间没有冲突`;
+}
+
+function formatReasonCode(code: string): string | undefined {
+  if (code === "seed_target_date") return "待推进目标日期";
+  if (code === "seed_reminder_date") return "待推进提醒日期";
+  if (code === "seed_reminder_time") return "提醒时间";
+  if (code === "schedule_feedback_changed_time") return "你之前调整过的时间";
+  if (code === "schedule_feedback_selected_option") return "你之前选择过的推荐位";
+  return undefined;
+}
+
+function joinChineseList(items: string[]): string {
+  if (items.length <= 1) return items[0] || "";
+  if (items.length === 2) return `${items[0]}和${items[1]}`;
+  return `${items.slice(0, -1).join("、")}和${items.at(-1)}`;
 }
 
 function formatScheduleSelectionHint(optionCount: number): string {
@@ -161,8 +194,13 @@ export function selectScheduleItemsFromMemoryDream(
       return {
         title: item.title,
         sourceIds: item.entry.sourceIds,
+        confidence: item.entry.confidence,
+        ...(metadata.reasonCodes && metadata.reasonCodes.length > 0 ? { reasonCodes: metadata.reasonCodes } : {}),
         ...(metadata.targetDate ? { date: metadata.targetDate } : {}),
         ...(metadata.durationMinutes ? { durationMinutes: metadata.durationMinutes } : {}),
+        ...(metadata.preferredReminderMinutes && metadata.preferredReminderMinutes.length > 0
+          ? { reminderMinutes: metadata.preferredReminderMinutes.length === 1 ? metadata.preferredReminderMinutes[0] : metadata.preferredReminderMinutes }
+          : {}),
       };
     });
 }
@@ -186,10 +224,12 @@ export function selectSchedulePreferencesFromMemoryDream(entries: MemoryDreamEnt
   const preferredWindows = activeEntries
     .flatMap((entry) => readScheduleMetadata(entry.metadata).preferredWindows || [])
     .filter((window, index, values) => values.indexOf(window) === index);
+  const preferredReminderMinutes = normalizeReminderPreference(activeEntries.flatMap((entry) => readScheduleMetadata(entry.metadata).preferredReminderMinutes || []));
 
   return {
     preferredStartTimes: [...new Set([...structuredStartTimes, ...legacyStartTimes])],
     ...(preferredWindows.length > 0 ? { preferredWindows } : {}),
+    ...(preferredReminderMinutes.length > 0 ? { preferredReminderMinutes } : {}),
   };
 }
 
@@ -203,12 +243,24 @@ type TimeBlock = {
   endMinute: number;
 };
 
-function normalizeProposalItem(value: ScheduleProposalItemInput): RequiredScheduleProposalItem | null {
+function normalizeProposalItem(value: ScheduleProposalItemInput, preferences?: SchedulePreferences): RequiredScheduleProposalItem | null {
   if (!value.title?.trim()) return null;
   const durationMinutes = normalizeDuration(value.durationMinutes);
+  const confidence = normalizeConfidence(value.confidence);
+  const preferredReminderMinutes = normalizeReminderPreference(preferences?.preferredReminderMinutes || []);
+  const reminderMinutes = value.reminderMinutes !== undefined
+    ? value.reminderMinutes
+    : preferredReminderMinutes.length === 1
+      ? preferredReminderMinutes[0]
+      : preferredReminderMinutes.length > 1
+        ? preferredReminderMinutes
+        : undefined;
   return {
     ...value,
     title: value.title.trim(),
+    ...(value.reasonCodes && value.reasonCodes.length > 0 ? { reasonCodes: uniqueStrings(value.reasonCodes) } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(reminderMinutes !== undefined ? { reminderMinutes } : {}),
     durationMinutes,
   };
 }
@@ -234,10 +286,13 @@ function readScheduleMetadata(value: MemoryDreamEntryMetadata | undefined): Memo
     ...((value.preferredStartTimes || []).filter(isValidTime)),
   ].filter(isWorkdayTime);
   const preferredWindows = (value.preferredWindows || []).filter(isPreferredWindow);
+  const preferredReminderMinutes = normalizeReminderPreference(value.preferredReminderMinutes || []);
   return {
     ...(isValidDate(value.targetDate) ? { targetDate: value.targetDate } : {}),
     ...(preferredStartTimes[0] ? { preferredStartTime: preferredStartTimes[0], preferredStartTimes: [...new Set(preferredStartTimes)] } : {}),
     ...(preferredWindows.length > 0 ? { preferredWindows: [...new Set(preferredWindows)] } : {}),
+    ...(preferredReminderMinutes.length > 0 ? { preferredReminderMinutes } : {}),
+    ...(Array.isArray(value.reasonCodes) ? { reasonCodes: uniqueStrings(value.reasonCodes.filter((item): item is string => typeof item === "string")) } : {}),
     ...(typeof value.durationMinutes === "number" && Number.isInteger(value.durationMinutes) && value.durationMinutes >= 15 && value.durationMinutes <= 240
       ? { durationMinutes: value.durationMinutes }
       : {}),
@@ -246,6 +301,16 @@ function readScheduleMetadata(value: MemoryDreamEntryMetadata | undefined): Memo
 
 function isPreferredWindow(value: unknown): value is SchedulePreferredWindow {
   return value === "morning" || value === "afternoon" || value === "evening" || value === "later";
+}
+
+function isReminderMinutes(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 1440;
+}
+
+function normalizeReminderPreference(values: number[]): number[] {
+  const positives = [...new Set(values.filter((value) => isReminderMinutes(value) && value > 0))].sort((a, b) => b - a).slice(0, 3);
+  if (positives.length > 0) return positives;
+  return values.some((value) => value === 0) ? [0] : [];
 }
 
 function buildStartOffsets(preferences: SchedulePreferences | undefined): number[] {
@@ -298,6 +363,8 @@ function buildOptionItems(input: {
       itemNumber: index + 1,
       title: item.title,
       ...(item.sourceIds && item.sourceIds.length > 0 ? { sourceIds: item.sourceIds } : {}),
+      ...(item.reasonCodes && item.reasonCodes.length > 0 ? { reasonCodes: item.reasonCodes } : {}),
+      ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
       date: item.date || input.date,
       startTime: minutesToTime(slot.startMinute),
       endTime: minutesToTime(slot.endMinute),
@@ -401,6 +468,11 @@ function timeToMinutes(value: string): number {
 
 function normalizeDuration(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 15 || value > 240) return DEFAULT_DURATION_MINUTES;
+  return value;
+}
+
+function normalizeConfidence(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return undefined;
   return value;
 }
 

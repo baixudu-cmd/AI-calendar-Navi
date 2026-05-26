@@ -103,6 +103,24 @@ describe("proactive runtime doctor", () => {
     expect(result.details).toContain("微信主动发送目标已匹配 context token。");
   });
 
+  it("fails when the matching Weixin context token is stale", () => {
+    const result = runProactiveRuntimeDoctor({
+      launchctlList: healthyLaunchctl,
+      openclawCronJobsJson: healthyCron,
+      processList: "",
+      proactiveWechatAccountId: "106501ee843a-im-bot",
+      proactiveWechatTarget: "o9cq80ySPgCcTOnn6_g9Ir3CpcWU@im.wechat",
+      weixinContextTokensJson: JSON.stringify({
+        "o9cq80ySPgCcTOnn6_g9Ir3CpcWU@im.wechat": "context-token",
+      }),
+      weixinContextTokensUpdatedAt: "2026-05-19T11:28:12.206Z",
+      now: "2026-05-22T00:30:00.000Z",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.details).toContain("微信主动发送 context token 已超过 36 小时未刷新，可能无法可见送达。");
+  });
+
   it("runs from the CLI with snapshot files", () => {
     const dir = mkdtempSync(join(tmpdir(), "navi-proactive-runtime-"));
     const launchctlFile = join(dir, "launchctl.txt");

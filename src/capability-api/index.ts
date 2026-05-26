@@ -79,6 +79,13 @@ const CALENDAR_EXECUTION_FAILURES: CapabilityApiFailureMode[] = [
   { code: "state_target_missing", meaning: "本地短期状态里找不到要修改或删除的目标。", userVisible: true },
 ];
 
+const GROUPED_WATCHLIST_STATE = [
+  "pending_reminder_seed_items",
+  "pending_schedule_seed_items",
+  "pending_todo_seed_items",
+  "shelved_seed_items",
+];
+
 // 返回完整能力目录；调用方只读，不在这里执行真实业务。
 export function getCapabilityApiRegistry(): readonly CapabilityApiEntry[] {
   return CAPABILITY_API_REGISTRY;
@@ -140,7 +147,15 @@ export const CAPABILITY_API_REGISTRY: readonly CapabilityApiEntry[] = [
     inputContract: { kind: "typescript_type", typeName: "AssistantCoreMessageInput" },
     outputContract: ["CalendarAgentResponse"],
     sideEffects: ["复用 assistant.handle_message 的所有副作用"],
-    stateTouched: ["last_event", "pending_delete", "pending_conflict", "pending_schedule", "seed_items", "briefing_items"],
+    stateTouched: [
+      "last_event",
+      "pending_delete",
+      "pending_conflict",
+      "pending_schedule",
+      "seed_items",
+      ...GROUPED_WATCHLIST_STATE,
+      "briefing_items",
+    ],
     failureModes: [
       { code: "entry_rejected", meaning: "入口保护拒绝空消息、重复消息或超长消息。", userVisible: true },
       { code: "model_rejected", meaning: "模型输出未通过工具合同或动作合同。", userVisible: true },
@@ -176,7 +191,15 @@ export const CAPABILITY_API_REGISTRY: readonly CapabilityApiEntry[] = [
     inputContract: { kind: "typescript_type", typeName: "CalendarAgentRequest" },
     outputContract: ["CalendarAgentResponse", "createdEvents 仅来自真实日历创建结果"],
     sideEffects: ["可写日历", "可写短期状态", "可写 Seed Lite", "可登记微信提醒", "可追加 memory dream observation"],
-    stateTouched: ["last_event", "pending_delete", "pending_conflict", "pending_schedule", "seed_items", "briefing_items"],
+    stateTouched: [
+      "last_event",
+      "pending_delete",
+      "pending_conflict",
+      "pending_schedule",
+      "seed_items",
+      ...GROUPED_WATCHLIST_STATE,
+      "briefing_items",
+    ],
     failureModes: [
       { code: "entry_rejected", meaning: "入口保护拒绝空消息、重复消息或超长消息。", userVisible: true },
       { code: "model_rejected", meaning: "模型输出未通过工具合同或动作合同。", userVisible: true },
@@ -211,14 +234,14 @@ export const CAPABILITY_API_REGISTRY: readonly CapabilityApiEntry[] = [
     implementationStatus: "implemented",
     inputContract: { kind: "cli", command: "npm run live:wechat-reminder-dispatcher" },
     outputContract: ["dispatch report", "reminder queue status"],
-    sideEffects: ["可发送微信", "可更新提醒队列 sent/failed 状态"],
+    sideEffects: ["可发送微信", "可更新提醒队列 sent/failed 状态", "会压掉同一标题、时间和提前量的活跃重复提醒"],
     stateTouched: ["wechat reminder queue"],
     failureModes: [
       { code: "runtime_doctor_failed", meaning: "发送前运行体检失败，停止派发。", userVisible: false },
       { code: "delivery_failed", meaning: "微信发送失败，队列保留失败状态。", userVisible: true },
     ],
     tests: ["tests/wechat-reminder.test.ts", "tests/proactive-runtime-doctor.test.ts"],
-    notes: "默认只保留提前 40 分钟单点提醒；显式关闭提醒时不登记微信提醒。",
+    notes: "默认只保留提前 40 分钟单点提醒；显式关闭提醒时不登记微信提醒；删除日程会取消对应未发送提醒。",
   },
   {
     apiName: "proactive.daily_briefing",
@@ -288,20 +311,23 @@ function sideEffectsForTool(toolName: CalendarToolName): string[] {
   }
   if (toolName === "calendar.confirm_create") return ["确认后可写日历"];
   if (toolName === "assistant.clarify") return ["可写 pending_clarification"];
+  if (toolName === "calendar.update_event") return ["可写日历", "可刷新对应未发送微信提醒"];
   return ["可写日历", "可登记微信提醒"];
 }
 
 // 标注工具会读写的短期状态。
 function stateForTool(toolName: CalendarToolName): string[] {
   if (toolName === "calendar.update_event") return ["last_event", "briefing_items"];
-  if (toolName === "calendar.propose_schedule") return ["pending_schedule", "seed_items"];
+  if (toolName === "calendar.propose_schedule") return ["pending_schedule", "seed_items", ...GROUPED_WATCHLIST_STATE];
   if (toolName === "calendar.confirm_schedule") return ["pending_schedule"];
-  if (toolName === "assistant.manage_todos") return ["seed_items"];
+  if (toolName === "assistant.manage_todos") return ["seed_items", ...GROUPED_WATCHLIST_STATE];
   if (toolName === "calendar.delete_event" || toolName === "calendar.delete_events" || toolName === "calendar.confirm_delete") return ["pending_delete"];
   if (toolName === "calendar.confirm_create") return ["pending_conflict"];
-  if (toolName === "calendar.daily_briefing") return ["briefing_items", "seed_items"];
+  if (toolName === "calendar.daily_briefing") return ["briefing_items", "seed_items", ...GROUPED_WATCHLIST_STATE];
   if (toolName === "assistant.settings_summary") return [];
-  if (toolName === "assistant.status_overview") return ["pending_clarification", "pending_delete", "pending_conflict", "pending_schedule", "seed_items"];
+  if (toolName === "assistant.status_overview") {
+    return ["pending_clarification", "pending_delete", "pending_conflict", "pending_schedule", "seed_items", ...GROUPED_WATCHLIST_STATE];
+  }
   if (toolName === "assistant.dismiss_context") return ["pending_clarification", "pending_delete", "pending_conflict", "pending_schedule", "pending_image_draft"];
   if (toolName === "assistant.clarify") return ["pending_clarification"];
   return ["last_event"];

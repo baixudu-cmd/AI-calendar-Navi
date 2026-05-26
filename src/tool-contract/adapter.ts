@@ -54,10 +54,10 @@ export function toolCallToCalendarAction(call: AdaptableCalendarToolCall): Calen
         ...(call.arguments.date ? { date: call.arguments.date } : {}),
       };
     case "assistant.manage_todos":
-      if (call.arguments.operation === "list") {
+      if (call.arguments.operation === "list" || call.arguments.operation === "list_shelved") {
         return {
           type: "manage_todos",
-          operation: "list",
+          operation: call.arguments.operation,
           ...(call.arguments.limit ? { limit: call.arguments.limit } : {}),
         };
       }

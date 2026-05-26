@@ -49,6 +49,7 @@ describe("model decision client", () => {
     expect(systemPrompt).toContain('"itemNumbers":[1,3]');
     expect(systemPrompt).toContain("把第一个和第三个安排一下");
     expect(systemPrompt).toContain("reminderAt");
+    expect(systemPrompt).toContain("reminderMinutes 可以是数组");
     expect(systemPrompt).toContain("不要再用 assistant.remember_todo 重复记录");
     expect(systemPrompt).toContain('"sourceIds":["seed_1"]');
     expect(systemPrompt).toContain("state.pending_schedule");

@@ -16,8 +16,8 @@ export function lastEventStateFromCalendarEvent(event: FeishuCalendarEvent): Las
 }
 
 // 从列表或日报结果里提取可被“第 N 条”引用的状态。
-export function briefingItemStateFromCalendarEvent(event: FeishuCalendarEvent, itemNumber: number): BriefingItemState {
-  const start = splitDateTime(event.start);
+export function briefingItemStateFromCalendarEvent(event: FeishuCalendarEvent, itemNumber: number, fallbackDate?: string): BriefingItemState {
+  const start = splitDateTime(event.start, fallbackDate);
 
   return {
     itemNumber,
@@ -29,9 +29,14 @@ export function briefingItemStateFromCalendarEvent(event: FeishuCalendarEvent, i
 }
 
 // 只解析日历 adapter 返回的稳定格式，不承担自然语言理解。
-function splitDateTime(value: string): { date?: string; startTime?: string } {
+function splitDateTime(value: string, fallbackDate?: string): { date?: string; startTime?: string } {
   const [date, time] = value.trim().split(/\s+/);
-  if (!date || !time) return {};
+  if (!date || !time) {
+    if (fallbackDate && isDateToken(fallbackDate) && isTimeToken(date?.slice(0, 5) || "")) {
+      return { date: fallbackDate, startTime: date.slice(0, 5) };
+    }
+    return {};
+  }
 
   const startTime = time.slice(0, 5);
   if (!isDateToken(date) || !isTimeToken(startTime)) return {};

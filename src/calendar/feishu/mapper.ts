@@ -5,6 +5,7 @@ import type { FeishuCreatePayload, FeishuUpdatePayload, ListEventsInput } from "
 
 const DEFAULT_TIMEZONE = "Asia/Shanghai";
 const CHINA_TIMEZONE_OFFSET = "+08:00";
+const DEFAULT_CREATE_REMINDER_MINUTES = 40;
 
 // 把本地日程草稿转成飞书创建事件 payload。
 export function mapCreateEventPayload(event: EventDraft, timezone = DEFAULT_TIMEZONE): FeishuCreatePayload {
@@ -17,7 +18,7 @@ export function mapCreateEventPayload(event: EventDraft, timezone = DEFAULT_TIME
     end_time: { timestamp: endTimestamp, timezone },
     ...(event.location ? { location: { name: event.location } } : {}),
     ...(event.notes ? { description: event.notes } : {}),
-    ...mapReminderMinutes(event.reminderMinutes),
+    ...mapReminderMinutes(event.reminderMinutes, DEFAULT_CREATE_REMINDER_MINUTES),
   };
 }
 
@@ -52,10 +53,12 @@ export function mapUpdateEventPayload(patch: Partial<EventDraft>, timezone = DEF
   };
 }
 
-function mapReminderMinutes(value: number | number[] | undefined): { reminders?: Array<{ minutes: number }> } {
-  const raw = Array.isArray(value) ? value : typeof value === "number" ? [value] : [];
-  const minutes = [...new Set(raw.filter((item) => Number.isInteger(item) && item > 0))];
-  return minutes.length > 0 ? { reminders: minutes.map((minute) => ({ minutes: minute })) } : {};
+function mapReminderMinutes(value: number | number[] | undefined, defaultMinute?: number): { reminders?: Array<{ minutes: number }> } {
+  if (value === undefined && defaultMinute === undefined) return {};
+  const effectiveValue = value === undefined ? defaultMinute : value;
+  const raw = Array.isArray(effectiveValue) ? effectiveValue : typeof effectiveValue === "number" ? [effectiveValue] : [];
+  const minutes = [...new Set(raw.filter((item) => Number.isInteger(item) && item > 0))].sort((a, b) => b - a).slice(0, 3);
+  return { reminders: minutes.map((minute) => ({ minutes: minute })) };
 }
 
 // 把本地日期和时间转换为飞书需要的秒级 timestamp 字符串。

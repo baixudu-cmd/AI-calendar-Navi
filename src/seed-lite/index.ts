@@ -8,6 +8,9 @@ export type SeedLiteItem = {
   title: string;
   targetDate?: string;
   reminderAt?: string;
+  status?: "shelved";
+  pullbackCount?: number;
+  lastPullbackAt?: string;
   createdAt?: string;
   sourceText?: string;
 };
@@ -25,6 +28,9 @@ export type SeedLitePatch = {
   targetDate?: string;
   reminderAt?: string;
   clearReminder?: boolean;
+  status?: "active" | "shelved";
+  pullbackCount?: number;
+  lastPullbackAt?: string;
 };
 
 export type SeedLiteStore = {
@@ -137,6 +143,10 @@ function updateSeedLiteItems(items: SeedLiteItem[], targets: Set<string>, patch:
     };
     if (patch.clearReminder) delete next.reminderAt;
     if (!patch.clearReminder && patch.reminderAt) next.reminderAt = patch.reminderAt;
+    if (patch.status === "shelved") next.status = "shelved";
+    if (patch.status === "active") delete next.status;
+    if (Number.isInteger(patch.pullbackCount) && Number(patch.pullbackCount) >= 0) next.pullbackCount = Number(patch.pullbackCount);
+    if (isDateText(patch.lastPullbackAt)) next.lastPullbackAt = patch.lastPullbackAt;
     return next;
   });
 }
@@ -157,6 +167,9 @@ function normalizeSeedLiteItem(value: unknown): SeedLiteItem | null {
     title: value.title,
     ...(isNonEmptyString(value.targetDate) ? { targetDate: value.targetDate } : {}),
     ...(isNonEmptyString(value.reminderAt) ? { reminderAt: value.reminderAt } : {}),
+    ...(value.status === "shelved" ? { status: "shelved" as const } : {}),
+    ...(Number.isInteger(value.pullbackCount) && Number(value.pullbackCount) >= 0 ? { pullbackCount: Number(value.pullbackCount) } : {}),
+    ...(isDateText(value.lastPullbackAt) ? { lastPullbackAt: value.lastPullbackAt } : {}),
     ...(isNonEmptyString(value.createdAt) ? { createdAt: value.createdAt } : {}),
     ...(isNonEmptyString(value.sourceText) ? { sourceText: value.sourceText } : {}),
   };
@@ -168,4 +181,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isDateText(value: unknown): value is string {
+  if (!isNonEmptyString(value)) return false;
+  const [yearText, monthText, dayText] = value.split("-");
+  if (!yearText || !monthText || !dayText || yearText.length !== 4 || monthText.length !== 2 || dayText.length !== 2) return false;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }

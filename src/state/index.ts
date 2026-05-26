@@ -73,6 +73,8 @@ export type PendingScheduleItemState = {
   itemNumber: number;
   title: string;
   sourceIds?: string[];
+  reasonCodes?: string[];
+  confidence?: number;
   date: string;
   startTime: string;
   endTime?: string;
@@ -102,6 +104,10 @@ export type ShortTermState = {
   pending_schedule?: PendingScheduleState;
   pending_image_draft?: EventDraft;
   seed_items?: SeedLiteItem[];
+  pending_reminder_seed_items?: SeedLiteItem[];
+  pending_schedule_seed_items?: SeedLiteItem[];
+  pending_todo_seed_items?: SeedLiteItem[];
+  shelved_seed_items?: SeedLiteItem[];
 };
 
 export type ShortTermStateStore = {
@@ -174,6 +180,22 @@ function sanitizeState(value: Record<string, unknown>): ShortTermState {
   if (Array.isArray(value.seed_items)) {
     const seedItems = value.seed_items.map(normalizeSeedItem).filter((item): item is SeedLiteItem => Boolean(item));
     if (seedItems.length > 0) next.seed_items = seedItems;
+  }
+  if (Array.isArray(value.pending_reminder_seed_items)) {
+    const seedItems = value.pending_reminder_seed_items.map(normalizeSeedItem).filter((item): item is SeedLiteItem => Boolean(item));
+    if (seedItems.length > 0) next.pending_reminder_seed_items = seedItems;
+  }
+  if (Array.isArray(value.pending_schedule_seed_items)) {
+    const seedItems = value.pending_schedule_seed_items.map(normalizeSeedItem).filter((item): item is SeedLiteItem => Boolean(item));
+    if (seedItems.length > 0) next.pending_schedule_seed_items = seedItems;
+  }
+  if (Array.isArray(value.pending_todo_seed_items)) {
+    const seedItems = value.pending_todo_seed_items.map(normalizeSeedItem).filter((item): item is SeedLiteItem => Boolean(item));
+    if (seedItems.length > 0) next.pending_todo_seed_items = seedItems;
+  }
+  if (Array.isArray(value.shelved_seed_items)) {
+    const shelvedSeedItems = value.shelved_seed_items.map(normalizeSeedItem).filter((item): item is SeedLiteItem => Boolean(item));
+    if (shelvedSeedItems.length > 0) next.shelved_seed_items = shelvedSeedItems;
   }
 
   return next;
@@ -337,10 +359,13 @@ function normalizePendingScheduleItem(value: unknown): PendingScheduleItemState 
     return null;
   }
 
+  const confidence = normalizeConfidence(value.confidence);
   const item: PendingScheduleItemState = {
     itemNumber: Number(value.itemNumber),
     title: value.title,
     ...(Array.isArray(value.sourceIds) ? { sourceIds: uniqueNonEmptyStrings(value.sourceIds) } : {}),
+    ...(Array.isArray(value.reasonCodes) ? { reasonCodes: uniqueNonEmptyStrings(value.reasonCodes) } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
     date: value.date,
     startTime: value.startTime,
     durationMinutes: Number(value.durationMinutes),
@@ -352,6 +377,11 @@ function normalizePendingScheduleItem(value: unknown): PendingScheduleItemState 
     ...(isNonEmptyString(value.notes) ? { notes: value.notes } : {}),
   };
   return item;
+}
+
+function normalizeConfidence(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return undefined;
+  return value;
 }
 
 function normalizePendingConflictAction(
@@ -404,6 +434,9 @@ function normalizeSeedItem(value: unknown): SeedLiteItem | null {
     title: value.title,
     ...(isNonEmptyString(value.targetDate) && isValidDate(value.targetDate) ? { targetDate: value.targetDate } : {}),
     ...(isNonEmptyString(value.reminderAt) ? { reminderAt: value.reminderAt } : {}),
+    ...(value.status === "shelved" ? { status: "shelved" as const } : {}),
+    ...(Number.isInteger(value.pullbackCount) && Number(value.pullbackCount) >= 0 ? { pullbackCount: Number(value.pullbackCount) } : {}),
+    ...(isNonEmptyString(value.lastPullbackAt) && isValidDate(value.lastPullbackAt) ? { lastPullbackAt: value.lastPullbackAt } : {}),
     ...(isNonEmptyString(value.createdAt) ? { createdAt: value.createdAt } : {}),
     ...(isNonEmptyString(value.sourceText) ? { sourceText: value.sourceText } : {}),
   };

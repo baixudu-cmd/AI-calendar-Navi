@@ -1,7 +1,7 @@
 // P12 主动链路运行体检 CLI：支持快照文件和 Mac mini 本机只读 live 模式。
 
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -28,6 +28,8 @@ type RuntimeSnapshot = {
   proactiveWechatAccountId?: string;
   proactiveWechatTarget?: string;
   weixinContextTokensJson?: string;
+  weixinContextTokensUpdatedAt?: string;
+  now?: string;
 };
 
 async function loadSnapshot(): Promise<{ ok: true; data: RuntimeSnapshot } | { ok: false; message: string }> {
@@ -56,6 +58,8 @@ async function loadFileSnapshot(): Promise<{ ok: true; data: RuntimeSnapshot } |
       proactiveWechatAccountId: process.env.PROACTIVE_WECHAT_ACCOUNT_ID,
       proactiveWechatTarget: process.env.PROACTIVE_WECHAT_TARGET,
       weixinContextTokensJson: await readOptionalWeixinContextTokens(),
+      weixinContextTokensUpdatedAt: await readOptionalWeixinContextTokensMtime(),
+      now: process.env.PROACTIVE_NOW || new Date().toISOString(),
     },
   };
 }
@@ -75,6 +79,8 @@ async function loadLiveSnapshot(): Promise<{ ok: true; data: RuntimeSnapshot }> 
       proactiveWechatAccountId: process.env.PROACTIVE_WECHAT_ACCOUNT_ID,
       proactiveWechatTarget: process.env.PROACTIVE_WECHAT_TARGET,
       weixinContextTokensJson: await readOptionalWeixinContextTokens(),
+      weixinContextTokensUpdatedAt: await readOptionalWeixinContextTokensMtime(),
+      now: process.env.PROACTIVE_NOW || new Date().toISOString(),
     },
   };
 }
@@ -85,13 +91,7 @@ async function runCommand(command: string, args: string[]): Promise<string> {
 }
 
 async function readOptionalWeixinContextTokens(): Promise<string | undefined> {
-  const explicitPath = process.env.PROACTIVE_RUNTIME_WEIXIN_CONTEXT_TOKENS_FILE;
-  const accountId = process.env.PROACTIVE_WECHAT_ACCOUNT_ID;
-  const tokenPath =
-    explicitPath ||
-    (accountId
-      ? join(homedir(), ".openclaw", "openclaw-weixin", "accounts", `${accountId}.context-tokens.json`)
-      : undefined);
+  const tokenPath = resolveWeixinContextTokensPath();
   if (!tokenPath) return undefined;
 
   try {
@@ -99,4 +99,21 @@ async function readOptionalWeixinContextTokens(): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+async function readOptionalWeixinContextTokensMtime(): Promise<string | undefined> {
+  const tokenPath = resolveWeixinContextTokensPath();
+  if (!tokenPath) return undefined;
+
+  try {
+    return (await stat(tokenPath)).mtime.toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveWeixinContextTokensPath(): string | undefined {
+  const explicitPath = process.env.PROACTIVE_RUNTIME_WEIXIN_CONTEXT_TOKENS_FILE;
+  const accountId = process.env.PROACTIVE_WECHAT_ACCOUNT_ID;
+  return explicitPath || (accountId ? join(homedir(), ".openclaw", "openclaw-weixin", "accounts", `${accountId}.context-tokens.json`) : undefined);
 }

@@ -11,6 +11,7 @@ These are safe to keep on GitHub:
 - Example configuration files such as `.env.example` and `config/settings.example.json`.
 - Public product docs: `README.md`, `docs/product-manual.md`, `docs/api/capability-apis.md`.
 - OpenClaw integration docs and smoke commands.
+- Placeholder LaunchAgent examples and public runner scripts under `scripts/`.
 - GitHub issue templates and PR templates.
 
 ## Keep private

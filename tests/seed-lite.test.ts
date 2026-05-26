@@ -33,4 +33,15 @@ describe("Seed Lite store", () => {
 
     await expect(store.update(["seed_1"], { clearReminder: true })).resolves.toEqual([{ seedId: "seed_1", title: "整理 DCF" }]);
   });
+
+  it("shelves and restores items without deleting them", async () => {
+    const store = createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" }]);
+
+    await expect(store.update(["seed_1"], { status: "shelved" })).resolves.toEqual([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+    ]);
+    await expect(store.update(["seed_1"], { status: "active" })).resolves.toEqual([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" },
+    ]);
+  });
 });

@@ -70,7 +70,8 @@ export type CalendarToolCall =
   | { toolName: "calendar.confirm_schedule"; arguments: { confirmed: boolean; optionNumber?: number; itemChanges?: ToolScheduleItemChange[] } }
   | { toolName: "assistant.remember_todo"; arguments: { title: string; autoSchedule?: boolean; date?: string } }
   | { toolName: "assistant.manage_todos"; arguments: { operation: "list"; limit?: number } }
-  | { toolName: "assistant.manage_todos"; arguments: { operation: "complete" | "delete"; target: ToolTodoTarget } }
+  | { toolName: "assistant.manage_todos"; arguments: { operation: "list_shelved"; limit?: number } }
+  | { toolName: "assistant.manage_todos"; arguments: { operation: "complete" | "delete" | "shelve" | "restore"; target: ToolTodoTarget } }
   | { toolName: "assistant.manage_todos"; arguments: { operation: "update"; target: ToolTodoTarget; patch: ToolTodoPatch } }
   | { toolName: "calendar.delete_event"; arguments: { target: ToolTargetReference } }
   | { toolName: "calendar.delete_events"; arguments: { query: ToolDeleteEventsQuery } }
@@ -162,7 +163,7 @@ export function validateToolCall(value: unknown, options: ToolValidationOptions 
 }
 
 function validateManageTodos(value: Record<string, unknown>): ToolValidationResult {
-  if (value.operation !== "list" && value.operation !== "complete" && value.operation !== "delete" && value.operation !== "update") {
+  if (value.operation !== "list" && value.operation !== "list_shelved" && value.operation !== "complete" && value.operation !== "delete" && value.operation !== "shelve" && value.operation !== "restore" && value.operation !== "update") {
     return fail("invalid_arguments", "待推进管理需要 operation。");
   }
 
@@ -179,9 +180,22 @@ function validateManageTodos(value: Record<string, unknown>): ToolValidationResu
     };
   }
 
+  if (value.operation === "list_shelved") {
+    return {
+      ok: true,
+      call: {
+        toolName: "assistant.manage_todos",
+        arguments: {
+          operation: "list_shelved",
+          ...(Number.isInteger(value.limit) && Number(value.limit) > 0 ? { limit: Number(value.limit) } : {}),
+        },
+      },
+    };
+  }
+
   if (!isRecord(value.target)) return fail("missing_arguments", "待推进管理需要 target。");
   const target = normalizeTodoTarget(value.target);
-  if (!target) return fail("invalid_arguments", "target 需要 seedId、itemNumber 或 title。");
+  if (!target) return fail("invalid_arguments", "target 需要 seedId、itemNumber、title 或 group。");
 
   if (value.operation === "update") {
     if (!isRecord(value.patch)) return fail("missing_arguments", "待推进修改需要 patch。");
@@ -366,7 +380,7 @@ function validateProposeSchedule(value: Record<string, unknown>): ToolValidation
   for (const item of Array.isArray(value.items) ? value.items : []) {
     if (!isRecord(item)) return fail("invalid_arguments", "排程事项必须是对象。");
     const target = isRecord(item.target) ? normalizeTodoTarget(item.target) : null;
-    if (item.target !== undefined && !target) return fail("invalid_arguments", "排程事项 target 需要 seedId、itemNumber 或 title。");
+    if (item.target !== undefined && !target) return fail("invalid_arguments", "排程事项 target 需要 seedId、itemNumber、title 或 group。");
     if (!isNonEmptyString(item.title) && !target) return fail("invalid_arguments", "排程事项需要 title 或 target。");
     items.push({
       ...(isNonEmptyString(item.title) ? { title: item.title } : {}),
@@ -595,8 +609,13 @@ function normalizeTodoTarget(value: Record<string, unknown>): ToolTodoTarget | n
     ...(Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0 ? { itemNumber: Number(value.itemNumber) } : {}),
     ...normalizeItemNumbersField(value.itemNumbers),
     ...(isNonEmptyString(value.title) ? { title: value.title.trim() } : {}),
+    ...(isTodoTargetGroup(value.group) ? { group: value.group } : {}),
   };
   return Object.keys(target).length > 0 ? target : null;
+}
+
+function isTodoTargetGroup(value: unknown): value is NonNullable<ToolTodoTarget["group"]> {
+  return value === "pending_schedule" || value === "pending_reminder" || value === "pending_todo" || value === "all";
 }
 
 function normalizeItemNumbersField(value: unknown): { itemNumbers?: number[] } {
@@ -645,11 +664,8 @@ function normalizeEventDraft(value: Record<string, unknown>): Partial<EventDraft
   if (isNonEmptyString(value.endTime)) draft.endTime = value.endTime;
   if (isNonEmptyString(value.location)) draft.location = value.location;
   if (isNonEmptyString(value.notes)) draft.notes = value.notes;
-  if (typeof value.reminderMinutes === "number") draft.reminderMinutes = value.reminderMinutes;
-  if (Array.isArray(value.reminderMinutes)) {
-    const minutes = value.reminderMinutes.filter((item): item is number => typeof item === "number");
-    if (minutes.length > 0) draft.reminderMinutes = minutes;
-  }
+  const reminderMinutes = normalizeReminderMinutes(value.reminderMinutes);
+  if (reminderMinutes !== undefined) draft.reminderMinutes = reminderMinutes;
   if (value.reminderAtStart === true) draft.reminderAtStart = true;
   if (Array.isArray(value.sourceIds)) draft.sourceIds = value.sourceIds.filter(isNonEmptyString);
   return draft;
@@ -657,10 +673,19 @@ function normalizeEventDraft(value: Record<string, unknown>): Partial<EventDraft
 
 function hasStartTimeEvidence(value: Record<string, unknown>, sourceText: string): boolean {
   if (!isNonEmptyString(value.startTimeEvidence)) return false;
+  if (!isNonEmptyString(value.startTime)) return false;
   const normalizedSource = normalizeEvidenceText(sourceText);
   const normalizedEvidence = normalizeEvidenceText(value.startTimeEvidence);
-  if (normalizedEvidence.length > 0 && normalizedSource.includes(normalizedEvidence)) return true;
-  return canonicalTimeEvidenceVariants(value.startTimeEvidence).some((variant) => normalizedSource.includes(normalizeEvidenceText(variant)));
+  const evidenceInSource =
+    (normalizedEvidence.length > 0 && normalizedSource.includes(normalizedEvidence)) ||
+    canonicalTimeEvidenceVariants(value.startTimeEvidence).some((variant) => normalizedSource.includes(normalizeEvidenceText(variant)));
+  if (!evidenceInSource) return false;
+
+  const startTimeVariants = canonicalStartTimeEvidenceVariants(value.startTime);
+  return startTimeVariants.some((variant) => {
+    const normalizedVariant = normalizeEvidenceText(variant);
+    return normalizedEvidence.includes(normalizedVariant) || normalizedSource.includes(normalizedVariant);
+  });
 }
 
 function hasSourceIds(value: Record<string, unknown>): boolean {
@@ -692,6 +717,74 @@ function canonicalTimeEvidenceVariants(value: string): string[] {
   return variants;
 }
 
+function canonicalStartTimeEvidenceVariants(value: string): string[] {
+  const [hourText, minuteText] = value.normalize("NFKC").trim().split(":");
+  if (hourText === undefined || minuteText === undefined) return [];
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return [];
+
+  const minutePadded = String(minute).padStart(2, "0");
+  const hourPadded = String(hour).padStart(2, "0");
+  const variants = [
+    `${hour}:${minutePadded}`,
+    `${hourPadded}:${minutePadded}`,
+    `${hour}点${minutePadded}`,
+    `${hourPadded}点${minutePadded}`,
+  ];
+  if (minute === 0) variants.push(`${hour}点`, `${hourPadded}点`);
+  if (minute === 30) variants.push(`${hour}点半`, `${hourPadded}点半`);
+  for (const chineseHour of chineseHourVariants(hour)) {
+    variants.push(`${chineseHour}点${minutePadded}`);
+    if (minute === 0) variants.push(`${chineseHour}点`);
+    if (minute === 30) variants.push(`${chineseHour}点半`);
+  }
+
+  const addPeriodVariants = (period: string, displayHour: number) => {
+    const displayHourPadded = String(displayHour).padStart(2, "0");
+    variants.push(`${period}${displayHour}:${minutePadded}`, `${period}${displayHourPadded}:${minutePadded}`);
+    variants.push(`${period}${displayHour}点${minutePadded}`, `${period}${displayHourPadded}点${minutePadded}`);
+    if (minute === 0) variants.push(`${period}${displayHour}点`, `${period}${displayHourPadded}点`);
+    if (minute === 30) variants.push(`${period}${displayHour}点半`, `${period}${displayHourPadded}点半`);
+    for (const chineseHour of chineseHourVariants(displayHour)) {
+      variants.push(`${period}${chineseHour}点${minutePadded}`);
+      if (minute === 0) variants.push(`${period}${chineseHour}点`);
+      if (minute === 30) variants.push(`${period}${chineseHour}点半`);
+    }
+  };
+
+  if (hour >= 5 && hour < 12) {
+    addPeriodVariants("上午", hour);
+    addPeriodVariants("早上", hour);
+  }
+  if (hour >= 12 && hour < 18) addPeriodVariants("下午", hour === 12 ? 12 : hour - 12);
+  if (hour >= 18 && hour <= 23) {
+    const displayHour = hour - 12;
+    addPeriodVariants("晚上", displayHour);
+    addPeriodVariants("晚", displayHour);
+  }
+  return [...new Set(variants)];
+}
+
+function chineseHourVariants(value: number): string[] {
+  const map: Record<number, string[]> = {
+    0: ["零"],
+    1: ["一"],
+    2: ["二", "两"],
+    3: ["三"],
+    4: ["四"],
+    5: ["五"],
+    6: ["六"],
+    7: ["七"],
+    8: ["八"],
+    9: ["九"],
+    10: ["十"],
+    11: ["十一"],
+    12: ["十二"],
+  };
+  return map[value] || [];
+}
+
 function normalizeScheduleItemChanges(value: unknown): { ok: true; data: ToolScheduleItemChange[] } | ToolValidationFailure {
   if (value === undefined) return { ok: true, data: [] };
   if (!Array.isArray(value)) return fail("invalid_arguments", "itemChanges 需要数组。");
@@ -719,8 +812,9 @@ function normalizeScheduleItemChanges(value: unknown): { ok: true; data: ToolSch
 function normalizeReminderMinutes(value: unknown): number | number[] | undefined {
   if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
   if (!Array.isArray(value)) return undefined;
-  const minutes = [...new Set(value.filter((item): item is number => Number.isInteger(item) && item >= 0))];
-  return minutes.length > 0 ? minutes : undefined;
+  const positives = [...new Set(value.filter((item): item is number => Number.isInteger(item) && item > 0))].sort((a, b) => b - a).slice(0, 3);
+  if (positives.length > 0) return positives;
+  return value.some((item) => item === 0) ? 0 : undefined;
 }
 
 function hasExecutablePatch(value: Partial<EventDraft>): boolean {

@@ -144,6 +144,9 @@ git push -u origin main
 - README / ARCHITECTURE / PUBLICATION
 - `.env.example`
 - `config/settings.example.json`
+- `ops/launchagents/` 中的占位符样例
+- `scripts/run-memory-dream-launchagent.sh`
+- `scripts/run-proactive-launchagent.sh`
 - 公开文档和 GitHub Issue 模板
 
 不要公开：

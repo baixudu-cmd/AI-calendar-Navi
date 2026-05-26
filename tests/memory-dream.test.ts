@@ -297,6 +297,122 @@ describe("memory dream", () => {
     );
   });
 
+  it("turns schedule confirmation changes into schedule sense correction metadata", async () => {
+    const store = createMemoryMemoryDreamStore({
+      observations: [
+        {
+          id: "schedule_feedback_1",
+          observedAt: "2026-05-13T01:00:00.000Z",
+          requestId: "req_schedule_feedback_1",
+          actionType: "create_event",
+          ok: true,
+          sourceText: "改晚点，11点吧",
+          reply: "已新增日程：整理材料",
+          scheduleFeedback: {
+            kind: "schedule_time_changed",
+            targetDate: "2026-05-14",
+            preferredStartTimes: ["11:00"],
+            reasonCodes: ["schedule_feedback_changed_date", "schedule_feedback_changed_time"],
+          },
+        } as never,
+      ],
+    });
+
+    const result = await consolidateMemoryDream({
+      store,
+      now: "2026-05-13T04:00:00.000Z",
+      since: "2026-05-12T04:00:00.000Z",
+    });
+
+    expect(result.entries).toContainEqual(
+      expect.objectContaining({
+        kind: "correction_signal",
+        summary: "纠错信号：用户调整过排程推荐",
+        metadata: expect.objectContaining({
+          targetDate: "2026-05-14",
+          preferredStartTimes: ["11:00"],
+          reasonCodes: ["schedule_feedback_changed_date", "schedule_feedback_changed_time"],
+        }),
+      }),
+    );
+  });
+
+  it("turns schedule reminder changes into schedule sense correction metadata", async () => {
+    const store = createMemoryMemoryDreamStore({
+      observations: [
+        {
+          id: "schedule_feedback_reminder_1",
+          observedAt: "2026-05-13T01:00:00.000Z",
+          requestId: "req_schedule_feedback_reminder_1",
+          actionType: "create_event",
+          ok: true,
+          sourceText: "这个不用提醒",
+          reply: "已新增日程：整理材料",
+          scheduleFeedback: {
+            kind: "schedule_reminder_changed",
+            preferredReminderMinutes: [0],
+            reasonCodes: ["schedule_feedback_reminder_disabled"],
+          },
+        } as never,
+      ],
+    });
+
+    const result = await consolidateMemoryDream({
+      store,
+      now: "2026-05-13T04:00:00.000Z",
+      since: "2026-05-12T04:00:00.000Z",
+    });
+
+    expect(result.entries).toContainEqual(
+      expect.objectContaining({
+        kind: "correction_signal",
+        summary: "纠错信号：用户调整过排程推荐",
+        metadata: expect.objectContaining({
+          preferredReminderMinutes: [0],
+          reasonCodes: ["schedule_feedback_reminder_disabled"],
+        }),
+      }),
+    );
+  });
+
+  it("keeps multi-reminder correction metadata bounded and ordered", async () => {
+    const store = createMemoryMemoryDreamStore({
+      observations: [
+        {
+          id: "schedule_feedback_multi_reminder_1",
+          observedAt: "2026-05-13T01:00:00.000Z",
+          requestId: "req_schedule_feedback_multi_reminder_1",
+          actionType: "create_event",
+          ok: true,
+          sourceText: "这个比较重要，再提醒一次",
+          reply: "已新增日程：整理材料",
+          scheduleFeedback: {
+            kind: "schedule_reminder_changed",
+            preferredReminderMinutes: [10, 120, 40, 120, 5],
+            reasonCodes: ["schedule_feedback_reminder_changed"],
+          },
+        } as never,
+      ],
+    });
+
+    const result = await consolidateMemoryDream({
+      store,
+      now: "2026-05-13T04:00:00.000Z",
+      since: "2026-05-12T04:00:00.000Z",
+    });
+
+    expect(result.entries).toContainEqual(
+      expect.objectContaining({
+        kind: "correction_signal",
+        summary: "纠错信号：用户调整过排程推荐",
+        metadata: expect.objectContaining({
+          preferredReminderMinutes: [120, 40, 10],
+          reasonCodes: ["schedule_feedback_reminder_changed"],
+        }),
+      }),
+    );
+  });
+
   it("marks old unused entries as stale without deleting them", async () => {
     const store = createMemoryMemoryDreamStore({
       entries: [

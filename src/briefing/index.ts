@@ -3,11 +3,13 @@
 import type { CalendarAdapter } from "../calendar/action-executor.js";
 import { listEvents } from "../calendar-api/index.js";
 import type { CalendarAction } from "../contract/index.js";
+import { buildSeedLiteStatePatch } from "../agent-api/todo-inbox.js";
 import { formatCalendarDateLabel, formatCalendarEventLine } from "../reply/event-format.js";
-import { formatSeedLiteSection, type SeedLiteStore } from "../seed-lite/index.js";
+import type { SeedLiteStore } from "../seed-lite/index.js";
 import { buildStatusOverview } from "../status-overview/index.js";
 import { briefingItemStateFromCalendarEvent } from "../state/calendar-event.js";
 import type { ShortTermState, ShortTermStateStore } from "../state/index.js";
+import { advanceWatchlistPullback } from "../watchlist-pullback/index.js";
 
 export type ExecuteDailyBriefingInput = {
   briefingType: "morning" | "evening";
@@ -26,30 +28,30 @@ export async function executeDailyBriefing(input: ExecuteDailyBriefingInput): Pr
   const listResult = await listEvents(input.calendar, { date: targetDate });
 
   if (!listResult.ok) return { ok: false, reply: `没有成功：${listResult.message}` };
-  const seedItems = input.seedStore ? await input.seedStore.list() : [];
+  const listedSeedItems = input.seedStore ? await input.seedStore.list() : [];
+  const seedItems = await advanceWatchlistPullback({ seedStore: input.seedStore, seedItems: listedSeedItems, today: input.today });
 
-  input.state.update({
-    briefing_items: listResult.data.map((event, index) => briefingItemStateFromCalendarEvent(event, index + 1)),
-    seed_items: seedItems,
-  });
+  const numberedItems = listResult.data.map((event, index) => briefingItemStateFromCalendarEvent(event, index + 1, targetDate));
+  input.state.update(buildSeedLiteStatePatch(seedItems, {
+    briefing_items: numberedItems,
+    recent_event_items: numberedItems,
+  }));
 
   const title = `${input.briefingType === "morning" ? "早报" : "晚报"}｜${formatCalendarDateLabel(targetDate)}`;
-  const seedSection = formatSeedLiteSection(seedItems);
-  if (listResult.data.length === 0 && !seedSection) {
+  const watchlistSection = formatWatchlistSection(input.state.snapshot(), seedItems, input.today);
+  if (listResult.data.length === 0 && !watchlistSection) {
     return { ok: true, reply: `${title}\n这一天没有日程。` };
   }
 
   const lines = listResult.data.map((event, index) => formatCalendarEventLine(event, index + 1, { fallbackDate: targetDate }));
   const calendarSection = lines.length > 0 ? [input.briefingType === "morning" ? "今日日程：" : "明日日程：", ...lines].join("\n") : "";
-  const pendingContextSection = formatPendingContextSection(input.state.snapshot());
-  const actionHint = seedSection ? "可以直接说“第几个完成了”“第几个明天处理”“把第几个安排一下”或“这个先别提醒”。" : "";
-  return { ok: true, reply: [title, calendarSection, pendingContextSection, seedSection, actionHint].filter(Boolean).join("\n") };
+  return { ok: true, reply: [title, calendarSection, watchlistSection].filter(Boolean).join("\n") };
 }
 
-function formatPendingContextSection(state: ShortTermState): string {
-  const overview = buildStatusOverview({ state: { ...state, seed_items: [] }, seedItems: [] });
+function formatWatchlistSection(state: ShortTermState, seedItems: Awaited<ReturnType<SeedLiteStore["list"]>>, today: string): string {
+  const overview = buildStatusOverview({ state: { ...state, ...buildSeedLiteStatePatch(seedItems) }, seedItems, today });
   if (overview === "现在我这里没有挂起的待处理事项。") return "";
-  return ["待处理上下文：", ...overview.split("\n").slice(1)].join("\n");
+  return ["待处理工作台：", overview].join("\n");
 }
 
 // 把日报第 N 条修改解析成真实事件修改。

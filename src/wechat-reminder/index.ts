@@ -24,6 +24,7 @@ export type WechatReminderJob = {
 export type WechatReminderStore = {
   list(): Promise<WechatReminderJob[]>;
   addMany(jobs: WechatReminderJob[]): Promise<void>;
+  cancelForEvents(eventIds: string[]): Promise<void>;
   markSent(jobId: string): Promise<void>;
   markFailed(jobId: string, error: string, attemptedAt: string): Promise<void>;
 };
@@ -63,6 +64,9 @@ export function createMemoryWechatReminderStore(initialJobs: WechatReminderJob[]
     async addMany(nextJobs) {
       jobs = mergeJobs(jobs, nextJobs);
     },
+    async cancelForEvents(eventIds) {
+      jobs = cancelUnsentJobsForEvents(jobs, eventIds);
+    },
     async markSent(jobId) {
       jobs = jobs.map((job) => (job.jobId === jobId ? markJobSent(job) : job));
     },
@@ -80,18 +84,18 @@ export function createFileWechatReminderStore(filePath: string): WechatReminderS
     },
     async addMany(nextJobs) {
       const jobs = mergeJobs(await readJobs(filePath), nextJobs);
-      await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
+      await writeReminderJobs(filePath, jobs);
+    },
+    async cancelForEvents(eventIds) {
+      await writeReminderJobs(filePath, cancelUnsentJobsForEvents(await readJobs(filePath), eventIds));
     },
     async markSent(jobId) {
       const jobs = (await readJobs(filePath)).map((job) => (job.jobId === jobId ? markJobSent(job) : job));
-      await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
+      await writeReminderJobs(filePath, jobs);
     },
     async markFailed(jobId, error, attemptedAt) {
       const jobs = (await readJobs(filePath)).map((job) => (job.jobId === jobId ? markJobFailed(job, error, attemptedAt) : job));
-      await mkdir(dirname(filePath), { recursive: true });
-      await writeFile(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
+      await writeReminderJobs(filePath, jobs);
     },
   };
 }
@@ -133,7 +137,7 @@ export async function dispatchDueWechatReminders(input: DispatchWechatRemindersI
     const result = await input.delivery.deliver({
       key: job.jobId,
       mode: "wechat-reminder",
-      message: formatWechatReminderMessage(job),
+      message: formatWechatReminderMessage(job, input.now),
     });
     if (result.ok) {
       await input.store.markSent(job.jobId);
@@ -178,10 +182,19 @@ export async function inspectWechatReminderStatus(input: { store: WechatReminder
   };
 }
 
-export function formatWechatReminderMessage(job: WechatReminderJob): string {
+export function formatWechatReminderMessage(job: WechatReminderJob, now?: string): string {
   const eventLine = formatCalendarEventLine({ id: job.eventId, title: job.title, start: job.start }, 0).replace(/^0\. /, "");
-  if (job.leadMinutes === 0) return `微信提醒｜到时间了\n${eventLine}`;
-  return `微信提醒｜还有 ${job.leadMinutes} 分钟\n${eventLine}`;
+  const remainingMinutes = readRemainingMinutes(job.start, now);
+  if (job.leadMinutes === 0 || remainingMinutes === 0) return `微信提醒｜到时间了\n${eventLine}`;
+  return `微信提醒｜还有 ${remainingMinutes ?? job.leadMinutes} 分钟\n${eventLine}`;
+}
+
+function readRemainingMinutes(start: string, now: string | undefined): number | undefined {
+  if (!now) return undefined;
+  const startAt = parseCalendarStart(start);
+  const nowAt = Date.parse(now);
+  if (!Number.isFinite(startAt) || !Number.isFinite(nowAt)) return undefined;
+  return Math.max(0, Math.ceil((startAt - nowAt) / 60_000));
 }
 
 async function readJobs(filePath: string): Promise<WechatReminderJob[]> {
@@ -200,11 +213,50 @@ function mergeJobs(current: WechatReminderJob[], nextJobs: WechatReminderJob[]):
   for (const job of sanitizeJobs(nextJobs)) {
     if (!byId.has(job.jobId)) byId.set(job.jobId, job);
   }
-  return [...byId.values()].sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt));
+  return sortJobs(dedupeActiveJobsByMessage([...byId.values()]));
+}
+
+function cancelUnsentJobsForEvents(jobs: WechatReminderJob[], eventIds: string[]): WechatReminderJob[] {
+  const targets = new Set(eventIds.map((eventId) => eventId.trim()).filter(Boolean));
+  if (targets.size === 0) return jobs;
+  return jobs.filter((job) => job.status === "sent" || !targets.has(job.eventId));
+}
+
+async function writeReminderJobs(filePath: string, jobs: WechatReminderJob[]) {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
 }
 
 function sanitizeJobs(value: unknown[]): WechatReminderJob[] {
-  return value.map(normalizeJob).filter((job): job is WechatReminderJob => Boolean(job));
+  return sortJobs(dedupeActiveJobsByMessage(value.map(normalizeJob).filter((job): job is WechatReminderJob => Boolean(job))));
+}
+
+function dedupeActiveJobsByMessage(jobs: WechatReminderJob[]): WechatReminderJob[] {
+  const result: WechatReminderJob[] = [];
+  const activeIndexByMessage = new Map<string, number>();
+  for (const job of jobs) {
+    if (job.status === "sent") {
+      result.push(job);
+      continue;
+    }
+    const key = reminderMessageKey(job);
+    const existingIndex = activeIndexByMessage.get(key);
+    if (existingIndex !== undefined) {
+      result[existingIndex] = job;
+    } else {
+      activeIndexByMessage.set(key, result.length);
+      result.push(job);
+    }
+  }
+  return result;
+}
+
+function reminderMessageKey(job: WechatReminderJob): string {
+  return [job.title.trim(), job.start.trim(), job.leadMinutes].join("\n");
+}
+
+function sortJobs(jobs: WechatReminderJob[]): WechatReminderJob[] {
+  return jobs.sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt));
 }
 
 function normalizeJob(value: unknown): WechatReminderJob | null {

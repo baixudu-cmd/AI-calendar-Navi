@@ -119,11 +119,31 @@ describe("WeChat reminder queue", () => {
     });
 
     expect(result).toEqual({ ok: true, sent: 1, failed: 0 });
-    expect(delivered).toEqual(["微信提醒｜还有 40 分钟\n2026年5月9日 星期六 15:00 投委会"]);
+    expect(delivered).toEqual(["微信提醒｜还有 25 分钟\n2026年5月9日 星期六 15:00 投委会"]);
     await expect(store.list()).resolves.toMatchObject([
       { jobId: "wechat-reminder:evt_1:2026-05-09 15:00:40", status: "sent" },
       { jobId: "wechat-reminder:evt_2:2026-05-09 16:00:40", status: "pending" },
     ]);
+  });
+
+  it("uses actual remaining minutes when a due reminder is dispatched late", async () => {
+    const store = createMemoryWechatReminderStore([
+      ...buildWechatReminderJobs({ id: "evt_late", title: "锐盟交流", start: "2026-05-26 09:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    ]);
+    const delivered: string[] = [];
+    const delivery = createInjectedProactiveDelivery(async (input) => {
+      delivered.push(input.message);
+      return { ok: true, mode: "wechat", message: "sent" };
+    });
+
+    const result = await dispatchDueWechatReminders({
+      store,
+      delivery,
+      now: "2026-05-26T00:26:00.000Z",
+    });
+
+    expect(result).toEqual({ ok: true, sent: 1, failed: 0 });
+    expect(delivered).toEqual(["微信提醒｜还有 34 分钟\n2026年5月26日 星期二 09:00 锐盟交流"]);
   });
 
   it("keeps failed due jobs visible and unsent after WeChat delivery fails", async () => {
@@ -151,6 +171,54 @@ describe("WeChat reminder queue", () => {
         lastAttemptAt: "2026-05-09T06:35:00.000Z",
       },
     ]);
+  });
+
+  it("cancels unsent reminder jobs when their calendar event is deleted", async () => {
+    const sentJob = {
+      ...buildWechatReminderJobs({ id: "evt_delete", title: "已发提醒", start: "2026-05-09 13:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES)[0],
+      status: "sent" as const,
+    };
+    const failedJob = {
+      ...buildWechatReminderJobs({ id: "evt_delete", title: "失败提醒", start: "2026-05-09 14:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES)[0],
+      status: "failed" as const,
+      lastError: "wechat failed",
+      lastAttemptAt: "2026-05-09T05:20:00.000Z",
+    };
+    const store = createMemoryWechatReminderStore([
+      sentJob,
+      failedJob,
+      ...buildWechatReminderJobs({ id: "evt_delete", title: "待删提醒", start: "2026-05-09 15:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+      ...buildWechatReminderJobs({ id: "evt_keep", title: "保留提醒", start: "2026-05-09 16:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    ]);
+
+    await store.cancelForEvents(["evt_delete"]);
+
+    await expect(store.list()).resolves.toMatchObject([
+      { eventId: "evt_delete", title: "已发提醒", status: "sent" },
+      { eventId: "evt_keep", title: "保留提醒", status: "pending" },
+    ]);
+  });
+
+  it("deduplicates active reminder jobs that would send the same WeChat message", async () => {
+    const store = createMemoryWechatReminderStore([
+      ...buildWechatReminderJobs({ id: "evt_old", title: "取快递", start: "2026-05-17 14:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+      ...buildWechatReminderJobs({ id: "evt_new", title: "取快递", start: "2026-05-17 14:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    ]);
+    const delivered: string[] = [];
+    const delivery = createInjectedProactiveDelivery(async (input) => {
+      delivered.push(input.message);
+      return { ok: true, mode: "wechat", message: "sent" };
+    });
+
+    const result = await dispatchDueWechatReminders({
+      store,
+      delivery,
+      now: "2026-05-17T05:30:00.000Z",
+    });
+
+    expect(result).toEqual({ ok: true, sent: 1, failed: 0 });
+    expect(delivered).toEqual(["微信提醒｜还有 30 分钟\n2026年5月17日 星期日 14:00 取快递"]);
+    await expect(store.list()).resolves.toMatchObject([{ eventId: "evt_new", status: "sent" }]);
   });
 
   it("summarizes queue status without reading Feishu calendar", async () => {

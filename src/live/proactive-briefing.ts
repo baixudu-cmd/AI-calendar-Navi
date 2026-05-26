@@ -2,12 +2,14 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { buildSeedLiteStatePatch } from "../agent-api/todo-inbox.js";
 import type { DeterministicCalendarAdapter } from "../calendar-api/index.js";
 import type { FeishuCalendarEvent } from "../calendar/feishu/types.js";
 import { formatCalendarDateLabel, formatCalendarEventLine } from "../reply/event-format.js";
-import { formatSeedLiteSection, type SeedLiteStore } from "../seed-lite/index.js";
+import type { SeedLiteItem, SeedLiteStore } from "../seed-lite/index.js";
 import { buildStatusOverview } from "../status-overview/index.js";
 import type { ShortTermState } from "../state/index.js";
+import { advanceWatchlistPullback } from "../watchlist-pullback/index.js";
 import type { ProactiveDelivery, ProactiveDeliveryMode } from "./proactive-delivery.js";
 
 export type ProactiveMode = "morning" | "evening" | "reminder";
@@ -116,9 +118,10 @@ async function runDailyBriefing(input: ProactiveBriefingInput): Promise<Proactiv
   const listed = await input.calendar.listEvents({ date: targetDate });
   if (!listed.ok) return { ok: false, mode: input.mode, sent: false, message: `没有发送成功：${listed.message}` };
   const events = sortEventsByStart(listed.data);
-  const seedItems = input.seedStore ? await input.seedStore.list() : [];
-  const pendingContextSection = formatPendingContextSection(input.pendingState);
-  if (events.length === 0 && seedItems.length === 0 && !pendingContextSection) {
+  const listedSeedItems = input.seedStore ? await input.seedStore.list() : [];
+  const seedItems = await advanceWatchlistPullback({ seedStore: input.seedStore, seedItems: listedSeedItems, today: input.today });
+  const watchlistSection = formatWatchlistSection(input.pendingState, seedItems, input.today);
+  if (events.length === 0 && seedItems.length === 0 && !watchlistSection) {
     if (input.mode === "evening") {
       const message = `晚报｜${formatCalendarDateLabel(targetDate)}\n明天没有安排日程。`;
       const delivery = await deliverProactiveMessage(input, { key, message, mode: input.mode });
@@ -133,8 +136,7 @@ async function runDailyBriefing(input: ProactiveBriefingInput): Promise<Proactiv
 
   const title = `${input.mode === "morning" ? "早报" : "晚报"}｜${formatCalendarDateLabel(targetDate)}`;
   const eventLines = events.map((event, index) => formatCalendarEventLine(event, index + 1, { fallbackDate: targetDate }));
-  const seedSection = formatSeedLiteSection(seedItems);
-  const message = [title, ...eventLines, pendingContextSection, seedSection].filter(Boolean).join("\n");
+  const message = [title, ...eventLines, watchlistSection].filter(Boolean).join("\n");
   const delivery = await deliverProactiveMessage(input, { key, message, mode: input.mode });
   if (!delivery.ok) return { ok: false, mode: input.mode, sent: false, deliveryMode: delivery.mode, message: `没有发送成功：${delivery.message}` };
 
@@ -142,11 +144,10 @@ async function runDailyBriefing(input: ProactiveBriefingInput): Promise<Proactiv
   return { ok: true, mode: input.mode, sent: true, key, message, deliveryMode: delivery.mode };
 }
 
-function formatPendingContextSection(state: ShortTermState | undefined): string {
-  if (!state) return "";
-  const overview = buildStatusOverview({ state: { ...state, seed_items: [] }, seedItems: [] });
+function formatWatchlistSection(state: ShortTermState | undefined, seedItems: SeedLiteItem[], today: string): string {
+  const overview = buildStatusOverview({ state: { ...(state || {}), ...buildSeedLiteStatePatch(seedItems) }, seedItems, today });
   if (overview === "现在我这里没有挂起的待处理事项。") return "";
-  return ["待处理上下文：", ...overview.split("\n").slice(1)].join("\n");
+  return ["待处理工作台：", overview].join("\n");
 }
 
 async function runReminder(input: ProactiveBriefingInput): Promise<ProactiveBriefingResult> {

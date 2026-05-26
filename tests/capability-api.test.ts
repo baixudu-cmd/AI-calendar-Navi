@@ -94,6 +94,29 @@ describe("capability api registry", () => {
     }
   });
 
+  it("documents grouped Watchlist state for assistant-facing capabilities", () => {
+    const groupedStateFields = [
+      "pending_reminder_seed_items",
+      "pending_schedule_seed_items",
+      "pending_todo_seed_items",
+      "shelved_seed_items",
+    ];
+    const apiNames = [
+      "assistant.core",
+      "assistant.handle_message",
+      "model_tool.calendar.propose_schedule",
+      "model_tool.calendar.daily_briefing",
+      "model_tool.assistant.status_overview",
+      "model_tool.assistant.manage_todos",
+    ];
+
+    for (const apiName of apiNames) {
+      const entry = findCapabilityApi(apiName);
+
+      expect(entry?.stateTouched).toEqual(expect.arrayContaining(groupedStateFields));
+    }
+  });
+
   it("wraps the message handler as the assistant core API", async () => {
     const decisionClient: DecisionClient = {
       async decide() {

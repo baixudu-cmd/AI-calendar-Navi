@@ -151,6 +151,31 @@ describe("contract validation", () => {
     });
   });
 
+  it("normalizes internal multi-reminder lists to at most three reminder points", () => {
+    expect(
+      normalizeDecision({
+        type: "create_event",
+        event: {
+          title: "重要会议",
+          date: "2026-05-12",
+          startTime: "15:00",
+          reminderMinutes: [10, 120, 40, 120, 5],
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      action: {
+        type: "create_event",
+        event: {
+          title: "重要会议",
+          date: "2026-05-12",
+          startTime: "15:00",
+          reminderMinutes: [120, 40, 10],
+        },
+      },
+    });
+  });
+
   it("accepts only the five v1 action types", () => {
     const actionTypes = [
       "create_event",

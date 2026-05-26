@@ -35,7 +35,9 @@ describe("briefing", () => {
     });
 
     expect(result).toEqual({ ok: true, reply: "早报｜2026年5月9日 星期六\n今日日程：\n1. 2026年5月9日 星期六 15:00 见张总" });
-    expect(state.snapshot().briefing_items).toEqual([{ itemNumber: 1, eventId: "evt_1", title: "见张总" }]);
+    expect(state.snapshot().briefing_items).toEqual([
+      { itemNumber: 1, eventId: "evt_1", title: "见张总", date: "2026-05-09", startTime: "15:00" },
+    ]);
   });
 
   it("orders same-day briefing items from morning to evening", async () => {
@@ -57,8 +59,8 @@ describe("briefing", () => {
       reply: "早报｜2026年5月13日 星期三\n今日日程：\n1. 2026年5月13日 星期三 10:00 DCF\n2. 2026年5月13日 星期三 18:00 阅盟材料",
     });
     expect(state.snapshot().briefing_items).toEqual([
-      { itemNumber: 1, eventId: "evt_2", title: "DCF" },
-      { itemNumber: 2, eventId: "evt_1", title: "阅盟材料" },
+      { itemNumber: 1, eventId: "evt_2", title: "DCF", date: "2026-05-13", startTime: "10:00" },
+      { itemNumber: 2, eventId: "evt_1", title: "阅盟材料", date: "2026-05-13", startTime: "18:00" },
     ]);
   });
 
@@ -85,11 +87,109 @@ describe("briefing", () => {
       ]),
     });
 
-    expect(result).toEqual({
-      ok: true,
-      reply:
-        "早报｜2026年5月9日 星期六\n今日日程：\n1. 2026年5月9日 星期六 10:00 电话会\n待推进收件箱：\n1. 拿币\n2. 整理材料（2026-05-12）\n可以直接说“第几个完成了”“第几个明天处理”“把第几个安排一下”或“这个先别提醒”。",
+    expect(result.ok).toBe(true);
+    expect(result.reply).toContain("早报｜2026年5月9日 星期六");
+    expect(result.reply).toContain("今日日程：");
+    expect(result.reply).toContain("1. 2026年5月9日 星期六 10:00 电话会");
+    expect(result.reply).toContain("待处理工作台：");
+    expect(result.reply).toContain("我现在帮你盯着 2 件事");
+    expect(result.reply).toContain("待安排：");
+    expect(result.reply).toContain("整理材料（2026-05-12）");
+    expect(result.reply).toContain("待推进：");
+    expect(result.reply).toContain("拿币");
+    expect(result.reply).toContain("第几个今天下午");
+    expect(result.reply).toContain("第几个完成了");
+  });
+
+  it("syncs grouped Watchlist state after daily briefing", async () => {
+    const state = createShortTermStateStore();
+    const result = await executeDailyBriefing({
+      briefingType: "morning",
+      today: "2026-05-09",
+      state,
+      calendar: createCalendar({}),
+      seedStore: createMemorySeedLiteStore([
+        { seedId: "seed_1", title: "订票", reminderAt: "2026-05-10 09:00" },
+        { seedId: "seed_2", title: "整理材料", targetDate: "2026-05-11" },
+        { seedId: "seed_3", title: "拿币" },
+        { seedId: "seed_4", title: "旧事项", status: "shelved" },
+      ]),
     });
+
+    expect(result.ok).toBe(true);
+    expect(state.snapshot()).toMatchObject({
+      seed_items: [
+        { seedId: "seed_1", title: "订票" },
+        { seedId: "seed_2", title: "整理材料" },
+        { seedId: "seed_3", title: "拿币" },
+      ],
+      pending_reminder_seed_items: [{ seedId: "seed_1", title: "订票" }],
+      pending_schedule_seed_items: [{ seedId: "seed_2", title: "整理材料" }],
+      pending_todo_seed_items: [{ seedId: "seed_3", title: "拿币" }],
+      shelved_seed_items: [{ seedId: "seed_4", title: "旧事项" }],
+    });
+  });
+
+  it("gently pulls back overdue watchlist items in daily briefing", async () => {
+    const result = await executeDailyBriefing({
+      briefingType: "morning",
+      today: "2026-05-14",
+      state: createShortTermStateStore(),
+      calendar: createCalendar({}),
+      seedStore: createMemorySeedLiteStore([
+        { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" },
+        { seedId: "seed_2", title: "订 1011 的 PS", reminderAt: "2026-05-13 08:00" },
+      ]),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.reply).toContain("温和拉回：整理材料、订 1011 的 PS 已过原定时间");
+    expect(result.reply).toContain("可以在对应分组里说“待安排里的第几个今天下午”或“待提醒里的第几个提前 2 小时”");
+    expect(result.reply).not.toContain("可以回“今天下午处理”“先不管”或“完成了”");
+  });
+
+  it("records gentle pullback progress once per day", async () => {
+    const seedStore = createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" }]);
+
+    await executeDailyBriefing({
+      briefingType: "morning",
+      today: "2026-05-14",
+      state: createShortTermStateStore(),
+      calendar: createCalendar({}),
+      seedStore,
+    });
+    await executeDailyBriefing({
+      briefingType: "evening",
+      today: "2026-05-14",
+      state: createShortTermStateStore(),
+      calendar: createCalendar({}),
+      seedStore,
+    });
+
+    await expect(seedStore.list()).resolves.toMatchObject([
+      { seedId: "seed_1", title: "整理材料", pullbackCount: 1, lastPullbackAt: "2026-05-14" },
+    ]);
+  });
+
+  it("shelves overdue watchlist items after two prior pullbacks", async () => {
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", pullbackCount: 2, lastPullbackAt: "2026-05-15" },
+    ]);
+
+    const result = await executeDailyBriefing({
+      briefingType: "morning",
+      today: "2026-05-16",
+      state: createShortTermStateStore(),
+      calendar: createCalendar({}),
+      seedStore,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.reply).not.toContain("温和拉回：整理材料");
+    expect(result.reply).toContain("搁置区还有 1 件");
+    await expect(seedStore.list()).resolves.toMatchObject([
+      { seedId: "seed_1", title: "整理材料", status: "shelved", pullbackCount: 2, lastPullbackAt: "2026-05-15" },
+    ]);
   });
 
   it("surfaces unresolved schedule context in daily briefing", async () => {
@@ -113,8 +213,11 @@ describe("briefing", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.reply).toContain("待处理上下文：");
-    expect(result.reply).toContain("待确认推荐：整理 DCF（2026-05-09 15:00）");
+    expect(result.reply).toContain("待处理工作台：");
+    expect(result.reply).toContain("我现在帮你盯着 1 件事");
+    expect(result.reply).toContain("待确认：");
+    expect(result.reply).toContain("排程推荐：整理 DCF（2026-05-09 15:00）");
+    expect(result.reply).toContain("待确认里的排程推荐可以说“确认第 1 个推荐位”");
   });
 
   it("uses tomorrow wording when evening briefing has no events", async () => {

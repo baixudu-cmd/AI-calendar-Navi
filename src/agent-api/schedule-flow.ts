@@ -29,12 +29,16 @@ export async function executeScheduleProposal(input: {
   defaultDate?: string;
   defaultStartTime?: string;
 }): Promise<ScheduleProposalFlowResult> {
-  const memoryDream = await loadScheduleMemory(input.memoryDreamStore);
   const pendingSchedule = input.state.snapshot().pending_schedule;
-  const candidateItems = memoryDream.items || [];
   const fallbackItems = input.fallbackItems || [];
   const explicitItems = normalizeExecutableScheduleItems(input.action.items);
   if (!explicitItems.ok) return { ok: false, reply: `没有成功：${explicitItems.message}`, actionType: "propose_schedule" };
+  if (pendingSchedule && shouldReuseStablePendingSchedule(input.action, explicitItems.items)) {
+    return { ok: true, reply: formatScheduleProposalReply(pendingSchedule), actionType: "propose_schedule" };
+  }
+
+  const memoryDream = await loadScheduleMemory(input.memoryDreamStore);
+  const candidateItems = memoryDream.items || [];
   const pendingItems = input.action.contextRef === "pending_schedule" ? scheduleItemsFromPendingSchedule(pendingSchedule) : [];
   const rawItems = explicitItems.items.length > 0 ? explicitItems.items : pendingItems.length > 0 ? pendingItems : candidateItems.length > 0 ? candidateItems : fallbackItems;
   if (rawItems.length === 0) return { ok: false, reply: "没有成功：没有可安排的待办候选。", actionType: "propose_schedule" };
@@ -61,12 +65,28 @@ export async function executeScheduleProposal(input: {
   return { ok: true, reply: formatScheduleProposalReply(proposal.pendingSchedule), actionType: "propose_schedule" };
 }
 
+function shouldReuseStablePendingSchedule(
+  action: Extract<CalendarAction, { type: "propose_schedule" }>,
+  explicitItems: ScheduleProposalItemInput[],
+): boolean {
+  return Boolean(
+    action.contextRef === "pending_schedule" &&
+      explicitItems.length === 0 &&
+      !action.date &&
+      !action.preferredStartTime &&
+      !action.preferredWindow &&
+      !action.optionCount,
+  );
+}
+
 function scheduleItemsFromPendingSchedule(pendingSchedule: PendingScheduleState | undefined): ScheduleProposalItemInput[] {
   const firstOption = pendingSchedule?.options[0];
   if (!firstOption) return [];
   return firstOption.items.map((item) => ({
     title: item.title,
     ...(item.sourceIds && item.sourceIds.length > 0 ? { sourceIds: item.sourceIds } : {}),
+    ...(item.reasonCodes && item.reasonCodes.length > 0 ? { reasonCodes: item.reasonCodes } : {}),
+    ...(item.confidence !== undefined ? { confidence: item.confidence } : {}),
     ...(item.durationMinutes ? { durationMinutes: item.durationMinutes } : {}),
     ...(item.location ? { location: item.location } : {}),
     ...(item.reminderMinutes !== undefined ? { reminderMinutes: item.reminderMinutes } : {}),
@@ -118,6 +138,9 @@ function mergeSchedulePreferences(input: {
   return {
     preferredStartTimes: [input.preferredStartTime, ...(input.preferences?.preferredStartTimes || []), defaultStartTime].filter((time): time is string => Boolean(time)),
     preferredWindows,
+    ...(input.preferences?.preferredReminderMinutes && input.preferences.preferredReminderMinutes.length > 0
+      ? { preferredReminderMinutes: input.preferences.preferredReminderMinutes }
+      : {}),
   };
 }
 

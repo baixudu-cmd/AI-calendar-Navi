@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.navi-calendar.memory-dream</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>__NAVI_PROJECT_ROOT__/scripts/run-memory-dream-launchagent.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>20</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__NAVI_PROJECT_ROOT__/logs/memory-dream-launchagent.log</string>
+  <key>StandardErrorPath</key>
+  <string>__NAVI_PROJECT_ROOT__/logs/memory-dream-launchagent.err.log</string>
+  <key>WorkingDirectory</key>
+  <string>__NAVI_PROJECT_ROOT__</string>
+</dict>
+</plist>

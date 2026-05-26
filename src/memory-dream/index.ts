@@ -19,6 +19,7 @@ export type MemoryDreamEntryMetadata = {
   targetDate?: string;
   preferredStartTime?: string;
   preferredStartTimes?: string[];
+  preferredReminderMinutes?: number[];
   preferredWindows?: MemoryDreamPreferredWindow[];
   durationMinutes?: number;
   reasonCodes?: string[];
@@ -35,12 +36,22 @@ export type MemoryDreamObservation = {
   ok: boolean;
   reply: string;
   createdEvents?: MemoryDreamCreatedEvent[];
+  scheduleFeedback?: MemoryDreamScheduleFeedback;
 };
 
 export type MemoryDreamCreatedEvent = {
   title: string;
   date: string;
   startTime: string;
+};
+
+export type MemoryDreamScheduleFeedback = {
+  kind: "schedule_time_changed" | "schedule_option_selected" | "schedule_reminder_changed" | "schedule_canceled";
+  targetDate?: string;
+  preferredStartTimes?: string[];
+  preferredReminderMinutes?: number[];
+  preferredWindows?: MemoryDreamPreferredWindow[];
+  reasonCodes?: string[];
 };
 
 export type StoredMemoryDreamObservation = Required<Pick<MemoryDreamObservation, "id">> &
@@ -269,10 +280,11 @@ function buildRecurringPatternEntries(observations: StoredMemoryDreamObservation
 
 function buildCorrectionSignalEntries(observations: StoredMemoryDreamObservation[], now: string): MemoryDreamEntry[] {
   const items = observations.filter((observation) => observation.actionType === "update_event");
-  if (items.length === 0) return [];
+  const scheduleItems = observations.filter((observation) => observation.scheduleFeedback);
+  const entries: MemoryDreamEntry[] = [];
 
-  return [
-    createEntry({
+  if (items.length > 0) {
+    entries.push(createEntry({
       kind: "correction_signal",
       summary: "纠错信号：用户近期修改过已锁定日程",
       sourceIds: items.map((item) => item.id),
@@ -282,8 +294,36 @@ function buildCorrectionSignalEntries(observations: StoredMemoryDreamObservation
       firstSeenAt: items.map((item) => item.observedAt).sort()[0] || now,
       lastSeenAt: items.map((item) => item.observedAt).sort().at(-1) || now,
       updatedAt: now,
-    }),
-  ];
+    }));
+  }
+
+  if (scheduleItems.length > 0) {
+    entries.push(createEntry({
+      kind: "correction_signal",
+      summary: "纠错信号：用户调整过排程推荐",
+      sourceIds: scheduleItems.map((item) => item.id),
+      metadata: scheduleFeedbackMetadata(scheduleItems),
+      confidence: 0.68,
+      status: scheduleItems.length >= 2 ? "stable" : "candidate",
+      reinforcementCount: scheduleItems.length,
+      firstSeenAt: scheduleItems.map((item) => item.observedAt).sort()[0] || now,
+      lastSeenAt: scheduleItems.map((item) => item.observedAt).sort().at(-1) || now,
+      updatedAt: now,
+    }));
+  }
+
+  return entries;
+}
+
+function scheduleFeedbackMetadata(observations: StoredMemoryDreamObservation[]): MemoryDreamEntryMetadata | undefined {
+  const targetDates = uniqueStrings(observations.map((item) => item.scheduleFeedback?.targetDate).filter((date): date is string => Boolean(date)));
+  return normalizeEntryMetadata({
+    ...(targetDates.length === 1 ? { targetDate: targetDates[0] } : {}),
+    preferredStartTimes: uniqueStrings(observations.flatMap((item) => item.scheduleFeedback?.preferredStartTimes || [])),
+    preferredReminderMinutes: uniqueNumbers(observations.flatMap((item) => item.scheduleFeedback?.preferredReminderMinutes || [])),
+    preferredWindows: uniqueWindows(observations.flatMap((item) => item.scheduleFeedback?.preferredWindows || [])),
+    reasonCodes: uniqueReasonCodes(observations.flatMap((item) => item.scheduleFeedback?.reasonCodes || [])),
+  });
 }
 
 function buildSchedulePreferenceEntries(observations: StoredMemoryDreamObservation[], now: string): MemoryDreamEntry[] {
@@ -422,6 +462,7 @@ function normalizeObservation(value: MemoryDreamObservation | unknown): StoredMe
   const requestId = readString(record.requestId) || `req_${stableHash(JSON.stringify(record))}`;
   const sourceText = readString(record.sourceText);
   const reply = readString(record.reply) || "";
+  const scheduleFeedback = readScheduleFeedback(record.scheduleFeedback);
   return {
     id: readString(record.id) || `obs_${compactTimestamp(observedAt)}_${stableHash(`${requestId}:${sourceText || reply}`)}`,
     observedAt,
@@ -433,7 +474,40 @@ function normalizeObservation(value: MemoryDreamObservation | unknown): StoredMe
     ok: Boolean(record.ok),
     reply: limitText(reply, 1000),
     ...(readCreatedEvents(record.createdEvents).length > 0 ? { createdEvents: readCreatedEvents(record.createdEvents) } : {}),
+    ...(scheduleFeedback ? { scheduleFeedback } : {}),
   };
+}
+
+function readScheduleFeedback(value: unknown): MemoryDreamScheduleFeedback | undefined {
+  if (!isRecord(value)) return undefined;
+  const kind = readScheduleFeedbackKind(value.kind);
+  if (!kind) return undefined;
+  const targetDate = readString(value.targetDate);
+  const preferredStartTimes = Array.isArray(value.preferredStartTimes)
+    ? value.preferredStartTimes.filter((item): item is string => typeof item === "string" && isValidTimeText(item))
+    : [];
+  const preferredWindows = Array.isArray(value.preferredWindows)
+    ? value.preferredWindows.map(readPreferredWindow).filter((item): item is MemoryDreamPreferredWindow => Boolean(item))
+    : [];
+  const preferredReminderMinutes = Array.isArray(value.preferredReminderMinutes)
+    ? value.preferredReminderMinutes.filter(isValidReminderMinutes)
+    : [];
+  const reasonCodes = Array.isArray(value.reasonCodes)
+    ? uniqueReasonCodes(value.reasonCodes.filter((item): item is string => typeof item === "string"))
+    : [];
+  return {
+    kind,
+    ...(isValidDateText(targetDate) ? { targetDate } : {}),
+    ...(preferredStartTimes.length > 0 ? { preferredStartTimes: uniqueStrings(preferredStartTimes) } : {}),
+    ...(preferredReminderMinutes.length > 0 ? { preferredReminderMinutes: uniqueNumbers(preferredReminderMinutes) } : {}),
+    ...(preferredWindows.length > 0 ? { preferredWindows: uniqueWindows(preferredWindows) } : {}),
+    ...(reasonCodes.length > 0 ? { reasonCodes } : {}),
+  };
+}
+
+function readScheduleFeedbackKind(value: unknown): MemoryDreamScheduleFeedback["kind"] | undefined {
+  if (value === "schedule_time_changed" || value === "schedule_option_selected" || value === "schedule_reminder_changed" || value === "schedule_canceled") return value;
+  return undefined;
 }
 
 function normalizeEntry(value: unknown): MemoryDreamEntry | null {
@@ -538,6 +612,10 @@ function mergeEntryMetadata(
       ...(normalizedCandidate.preferredWindows || []),
       ...(normalizedCurrent.preferredWindows || []),
     ]),
+    preferredReminderMinutes: uniqueNumbers([
+      ...(normalizedCandidate.preferredReminderMinutes || []),
+      ...(normalizedCurrent.preferredReminderMinutes || []),
+    ]),
     reasonCodes: uniqueReasonCodes([...(normalizedCurrent.reasonCodes || []), ...(normalizedCandidate.reasonCodes || [])]),
   });
 }
@@ -550,6 +628,9 @@ function normalizeEntryMetadata(value: unknown): MemoryDreamEntryMetadata | unde
     ? value.preferredStartTimes.filter((item): item is string => typeof item === "string" && isValidTimeText(item))
     : [];
   const preferredWindows = Array.isArray(value.preferredWindows) ? value.preferredWindows.map(readPreferredWindow).filter((item): item is MemoryDreamPreferredWindow => Boolean(item)) : [];
+  const preferredReminderMinutes = Array.isArray(value.preferredReminderMinutes)
+    ? value.preferredReminderMinutes.filter(isValidReminderMinutes)
+    : [];
   const durationMinutes = readNumber(value.durationMinutes);
   const reasonCodes = Array.isArray(value.reasonCodes)
     ? uniqueReasonCodes(value.reasonCodes.filter((item): item is string => typeof item === "string"))
@@ -561,6 +642,7 @@ function normalizeEntryMetadata(value: unknown): MemoryDreamEntryMetadata | unde
   const normalized: MemoryDreamEntryMetadata = {
     ...(isValidDateText(targetDate) ? { targetDate } : {}),
     ...(normalizedStartTimes[0] ? { preferredStartTime: normalizedStartTimes[0], preferredStartTimes: normalizedStartTimes } : {}),
+    ...(preferredReminderMinutes.length > 0 ? { preferredReminderMinutes: uniqueNumbers(preferredReminderMinutes) } : {}),
     ...(preferredWindows.length > 0 ? { preferredWindows: uniqueWindows(preferredWindows) } : {}),
     ...(isValidDurationMinutes(durationMinutes) ? { durationMinutes } : {}),
     ...(reasonCodes.length > 0 ? { reasonCodes } : {}),
@@ -677,8 +759,18 @@ function isValidDurationMinutes(value: number | undefined): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 15 && value <= 240;
 }
 
+function isValidReminderMinutes(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 1440;
+}
+
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))].sort();
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  const positives = [...new Set(values.filter((value) => Number.isInteger(value) && value > 0))].sort((a, b) => b - a).slice(0, 3);
+  if (positives.length > 0) return positives;
+  return values.some((value) => value === 0) ? [0] : [];
 }
 
 function minDateText(a: string, b: string): string {

@@ -13,19 +13,20 @@ import type { DecisionClient } from "../decision/index.js";
 import { protectIncomingMessage } from "../entry/index.js";
 import type { ImageDraftParser, ImageCalendarDraftParseResult } from "../image-capture/index.js";
 import { runDecisionLoop } from "../loop/index.js";
-import type { MemoryDreamCreatedEvent, MemoryDreamStore } from "../memory-dream/index.js";
+import type { MemoryDreamCreatedEvent, MemoryDreamScheduleFeedback, MemoryDreamStore } from "../memory-dream/index.js";
 import { formatCalendarDateLabel, formatCalendarEventDetail, formatCalendarEventLine } from "../reply/event-format.js";
 import { buildActionReply } from "../reply/index.js";
 import { buildSettingsSummary } from "../settings-summary/index.js";
 import { buildStatusOverview } from "../status-overview/index.js";
 import { briefingItemStateFromCalendarEvent, lastEventStateFromCalendarEvent } from "../state/calendar-event.js";
-import type { BriefingItemState, PendingConflictState, PendingDeleteItemState, PendingDeleteState, ShortTermStateStore } from "../state/index.js";
+import type { BriefingItemState, PendingConflictState, PendingDeleteItemState, PendingDeleteState, PendingScheduleState, ShortTermStateStore } from "../state/index.js";
 import { expirePendingInteractionState } from "../state/lifecycle.js";
 import type { SeedLiteStore } from "../seed-lite/index.js";
 import { buildWechatReminderJobs, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES, normalizeLeadMinutes, type WechatReminderStore } from "../wechat-reminder/index.js";
 import { executeScheduleProposal, resolveScheduleConfirmation } from "./schedule-flow.js";
 import {
   captureSeedLite,
+  buildSeedLiteStatePatch,
   completeSeedLiteSources,
   executeTodoInboxAction,
   formatSeedCaptureReply,
@@ -66,6 +67,7 @@ export type CalendarAgentResponse = {
   actionType: string;
   requestId: string;
   createdEvents?: MemoryDreamCreatedEvent[];
+  scheduleFeedback?: MemoryDreamScheduleFeedback;
 };
 
 type UpdateEventPatch = Extract<CalendarAction, { type: "update_event" }>["patch"];
@@ -93,7 +95,7 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
   }
 
   if (input.seedStore) {
-    input.state.update({ seed_items: await input.seedStore.list() });
+    syncSeedItemsForDecision(input.state, await input.seedStore.list());
   }
 
   const loopResult = await runDecisionLoop({
@@ -230,7 +232,13 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
   }
 
   if (loopResult.action.type === "confirm_delete") {
-    const confirmation = await executeDeleteConfirmation(loopResult.action.confirmed, input.state, input.calendar, loopResult.action.itemNumbers);
+    const confirmation = await executeDeleteConfirmation(
+      loopResult.action.confirmed,
+      input.state,
+      input.calendar,
+      input.wechatReminderStore,
+      loopResult.action.itemNumbers,
+    );
     return { ...confirmation, actionType: "confirm_delete", requestId };
   }
 
@@ -281,9 +289,11 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
   }
 
   if (loopResult.action.type === "confirm_schedule") {
+    const pendingSchedule = input.state.snapshot().pending_schedule;
+    const scheduleFeedback = buildScheduleFeedback(loopResult.action, pendingSchedule);
     const confirmation = resolveScheduleConfirmation({ action: loopResult.action, state: input.state });
     if (!confirmation.ok) return { ok: false, reply: `没有成功：${confirmation.message}`, actionType: "confirm_schedule", requestId };
-    if ("canceled" in confirmation) return { ok: true, reply: "已取消安排。", actionType: "confirm_schedule_cancel", requestId };
+    if ("canceled" in confirmation) return { ok: true, reply: "已取消安排。", actionType: "confirm_schedule_cancel", requestId, ...(scheduleFeedback ? { scheduleFeedback } : {}) };
     const result = await executeCalendarAgentAction({
       action: confirmation.action,
       input,
@@ -291,7 +301,7 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
       sourceText: protectedInput.message.text,
     });
     if (isCreatedActionType(result.actionType)) await completeSeedLiteSources(confirmation.completedSourceIds || [], input.seedStore, input.state);
-    return result;
+    return { ...result, ...(scheduleFeedback ? { scheduleFeedback } : {}) };
   }
 
   if (loopResult.action.type === "daily_briefing") {
@@ -319,11 +329,13 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
   }
 
   if (loopResult.action.type === "status_overview") {
+    const seedItems = input.seedStore ? await input.seedStore.list() : undefined;
+    if (seedItems) syncSeedItemsForDecision(input.state, seedItems);
     return {
       ok: true,
       reply: buildStatusOverview({
         state: input.state.snapshot(),
-        seedItems: input.seedStore ? await input.seedStore.list() : undefined,
+        seedItems,
       }),
       actionType: "status_overview",
       requestId,
@@ -341,6 +353,10 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
     requestId,
     sourceText: protectedInput.message.text,
   });
+}
+
+function syncSeedItemsForDecision(state: ShortTermStateStore, items: Awaited<ReturnType<SeedLiteStore["list"]>>) {
+  state.update(buildSeedLiteStatePatch(items));
 }
 
 function clearPendingContext(state: ShortTermStateStore) {
@@ -518,10 +534,78 @@ async function recordMemoryDreamObservation(input: CalendarAgentRequest, result:
       ok: result.ok,
       reply: result.reply,
       ...(result.createdEvents ? { createdEvents: result.createdEvents } : {}),
+      ...(result.scheduleFeedback ? { scheduleFeedback: result.scheduleFeedback } : {}),
     });
   } catch (error) {
     console.warn(`memory dream observation skipped: ${error instanceof Error ? error.message : "unknown error"}`);
   }
+}
+
+function buildScheduleFeedback(
+  action: Extract<CalendarAction, { type: "confirm_schedule" }>,
+  pendingSchedule: PendingScheduleState | undefined,
+): MemoryDreamScheduleFeedback | undefined {
+  if (!pendingSchedule) return undefined;
+  if (!action.confirmed) {
+    return { kind: "schedule_canceled", reasonCodes: ["schedule_feedback_canceled"] };
+  }
+
+  const option = pendingSchedule.options.find((candidate) => candidate.optionNumber === (action.optionNumber || 1));
+  const changedStartTimes = uniqueStrings((action.itemChanges || []).map((item) => item.startTime).filter((time): time is string => Boolean(time)));
+  const changedDates = uniqueStrings((action.itemChanges || []).map((item) => item.date).filter((date): date is string => Boolean(date)));
+  if (changedStartTimes.length > 0 || changedDates.length > 0) {
+    return {
+      kind: "schedule_time_changed",
+      ...(changedDates.length === 1 ? { targetDate: changedDates[0] } : {}),
+      preferredStartTimes: changedStartTimes,
+      reasonCodes: [
+        ...(changedDates.length > 0 ? ["schedule_feedback_changed_date"] : []),
+        ...(changedStartTimes.length > 0 ? ["schedule_feedback_changed_time"] : []),
+      ],
+    };
+  }
+
+  const changedReminderMinutes = uniqueReminderMinutes((action.itemChanges || []).flatMap((item) => normalizeReminderMinutesList(item.reminderMinutes)));
+  if (changedReminderMinutes.length > 0) {
+    return {
+      kind: "schedule_reminder_changed",
+      preferredReminderMinutes: changedReminderMinutes,
+      reasonCodes: changedReminderMinutes.includes(0) ? ["schedule_feedback_reminder_disabled"] : ["schedule_feedback_reminder_changed"],
+    };
+  }
+
+  if (option && action.optionNumber && action.optionNumber !== 1) {
+    return {
+      kind: "schedule_option_selected",
+      preferredStartTimes: uniqueStrings(option.items.map((item) => item.startTime)),
+      reasonCodes: ["schedule_feedback_selected_option"],
+    };
+  }
+
+  return undefined;
+}
+
+function normalizeReminderMinutesList(value: number | number[] | undefined): number[] {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return [value];
+  if (!Array.isArray(value)) return [];
+  const positives = [...new Set(value.filter((item): item is number => Number.isInteger(item) && item > 0))].sort((a, b) => b - a).slice(0, 3);
+  if (positives.length > 0) return positives;
+  return value.some((item) => item === 0) ? [0] : [];
+}
+
+function uniqueReminderMinutes(values: number[]): number[] {
+  const positives = [...new Set(values.filter((item) => Number.isInteger(item) && item > 0))].sort((a, b) => b - a).slice(0, 3);
+  if (positives.length > 0) return positives;
+  return values.some((item) => item === 0) ? [0] : [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed && !result.includes(trimmed)) result.push(trimmed);
+  }
+  return result;
 }
 
 async function handleMediaRequest(
@@ -620,9 +704,19 @@ async function executeCalendarAgentAction(input: {
 
   const execution = await executeCalendarAction(normalizedAction, input.input.calendar);
   if (execution.ok) {
+    const updateVerification = verifyUpdateExecutionResult(normalizedAction, execution.data);
+    if (!updateVerification.ok) {
+      return { ok: false, reply: `没有成功：${updateVerification.message}`, actionType: normalizedAction.type, requestId: input.requestId };
+    }
     updateState(input.input.state, normalizedAction, execution.data);
     if (normalizedAction.type === "create_event") input.input.state.clearPendingImageDraft();
     await registerWechatReminders({
+      action: normalizedAction,
+      data: execution.data,
+      store: input.input.wechatReminderStore,
+      defaultLeads: input.input.defaultWechatReminderLeadMinutes || DEFAULT_WECHAT_REMINDER_LEAD_MINUTES,
+    });
+    await refreshWechatRemindersAfterUpdate({
       action: normalizedAction,
       data: execution.data,
       store: input.input.wechatReminderStore,
@@ -803,6 +897,7 @@ async function executeDeleteConfirmation(
   confirmed: boolean,
   state: ShortTermStateStore,
   calendar: CalendarAdapter,
+  wechatReminderStore: WechatReminderStore | undefined,
   itemNumbers: number[] = [],
 ): Promise<{ ok: boolean; reply: string }> {
   const pendingDelete = state.snapshot().pending_delete;
@@ -822,6 +917,7 @@ async function executeDeleteConfirmation(
     const result = await deleteManyEvents(calendar, { eventIds: selection.eventIds, confirmed: true });
     if (!result.ok) return { ok: false, reply: formatDeleteExecutionFailure(result.message, formatPendingDeleteItemsForReply(selection.items)) };
 
+    await cancelDeletedWechatReminders(wechatReminderStore, result.data.deletedEventIds);
     clearDeletedState(state, result.data.deletedEventIds);
     return { ok: true, reply: `已删除 ${result.data.deletedEventIds.length} 个日程：\n${formatPendingDeleteItemsForReply(selection.items)}` };
   }
@@ -833,8 +929,14 @@ async function executeDeleteConfirmation(
   const result = await deleteEvent(calendar, { eventId: pendingDelete.eventId });
   if (!result.ok) return { ok: false, reply: formatDeleteExecutionFailure(result.message, formatPendingDeleteForReply(pendingDelete)) };
 
+  await cancelDeletedWechatReminders(wechatReminderStore, [pendingDelete.eventId]);
   clearDeletedState(state, [pendingDelete.eventId]);
   return { ok: true, reply: `已删除日程：\n${formatPendingDeleteForReply(pendingDelete)}` };
+}
+
+async function cancelDeletedWechatReminders(store: WechatReminderStore | undefined, eventIds: string[]) {
+  if (!store) return;
+  await store.cancelForEvents(eventIds);
 }
 
 function formatDeleteExecutionFailure(message: string, pendingText: string): string {
@@ -1018,12 +1120,13 @@ async function resolveExecutableAction(
     if (matches.events.length > 1) return { ok: false, message: `匹配到多个日程，请先查询后用第几个来修改。\n${formatPendingDeleteItemsForReply(matches.events.map(pendingDeleteItemFromCalendarEvent))}` };
     const parsed = parseEventStart(matches.events[0].start);
     if (changesTimeWithoutDate(action.patch, action.patch.date || parsed.date)) return { ok: false, message: "这个日程是哪一天？" };
+    const patchWithDate = fillPatchDateFromLastEvent(action.patch, parsed.date);
     return {
       ok: true,
       action: {
         ...action,
         target: { kind: "last_event", eventId: matches.events[0].id },
-        patch: fillPatchDateFromLastEvent(action.patch, parsed.date),
+        patch: fillUpdateEndTimeForMovedStart(patchWithDate, matches.events[0]),
       },
     };
   }
@@ -1041,19 +1144,26 @@ async function resolveExecutableAction(
   if (!targetEventId) return { ok: false, message: "没有找到刚才那个日程。" };
   if (changesTimeWithoutDate(resolved.action.patch, lastEvent?.date)) return { ok: false, message: "这个日程是哪一天？" };
 
+  const patch = await fillUpdateEndTimeFromCalendar({
+    patch: fillPatchDateFromLastEvent(resolved.action.patch, lastEvent?.date),
+    eventId: targetEventId,
+    calendar,
+  });
+
   return {
     ok: true,
     action: {
       ...resolved.action,
       target: { kind: "last_event", eventId: targetEventId },
-      patch: fillPatchDateFromLastEvent(resolved.action.patch, lastEvent?.date),
+      patch,
     },
   };
 }
 
 function updateState(state: ShortTermStateStore, action: CalendarAction, data: FeishuCalendarEvent | FeishuCalendarEvent[]) {
   if (Array.isArray(data)) {
-    const numberedItems = data.map((event, index) => briefingItemStateFromCalendarEvent(event, index + 1));
+    const fallbackDate = action.type === "list_events" ? action.date : undefined;
+    const numberedItems = data.map((event, index) => briefingItemStateFromCalendarEvent(event, index + 1, fallbackDate));
     state.update({
       briefing_items: numberedItems,
       recent_event_items: numberedItems,
@@ -1063,6 +1173,34 @@ function updateState(state: ShortTermStateStore, action: CalendarAction, data: F
   }
   if (action.type !== "create_event" && action.type !== "update_event") return;
   state.update({ last_event: lastEventStateFromCalendarEvent(data) });
+}
+
+function verifyUpdateExecutionResult(
+  action: CalendarAction,
+  data: FeishuCalendarEvent | FeishuCalendarEvent[],
+): { ok: true } | { ok: false; message: string } {
+  if (action.type !== "update_event" || Array.isArray(data)) return { ok: true };
+  const patch = action.patch;
+  const parsedStart = parseEventStart(data.start);
+  const parsedEnd = parseEventStart(data.end);
+
+  if (patch.title && data.title.trim() !== patch.title.trim()) {
+    return { ok: false, message: "飞书返回的日程没有体现修改后的标题。" };
+  }
+  if (patch.date && patch.startTime && (parsedStart.date !== patch.date || parsedStart.startTime !== patch.startTime)) {
+    return { ok: false, message: "飞书返回的日程没有体现修改后的时间。" };
+  }
+  if (
+    patch.date &&
+    patch.endTime &&
+    parsedEnd.date &&
+    parsedEnd.startTime &&
+    (parsedEnd.date !== patch.date || parsedEnd.startTime !== patch.endTime)
+  ) {
+    return { ok: false, message: "飞书返回的日程没有体现修改后的结束时间。" };
+  }
+
+  return { ok: true };
 }
 
 function resolveStateItemUpdate(action: CalendarAction, state: ShortTermStateStore): { ok: true; action: CalendarAction } | { ok: false; message: string } {
@@ -1123,6 +1261,43 @@ async function registerWechatReminders(input: {
   }
 }
 
+async function refreshWechatRemindersAfterUpdate(input: {
+  action: CalendarAction;
+  data: FeishuCalendarEvent | FeishuCalendarEvent[];
+  store: WechatReminderStore | undefined;
+  defaultLeads: number[];
+}) {
+  if (!input.store || input.action.type !== "update_event" || Array.isArray(input.data)) return;
+
+  const updatedEvent = input.data;
+  const existingJobs = (await input.store.list()).filter((job) => job.eventId === updatedEvent.id && job.status !== "sent");
+  const explicitReminder = input.action.patch.reminderMinutes !== undefined || input.action.patch.reminderAtStart === true;
+  if (!explicitReminder && existingJobs.length === 0) return;
+
+  await input.store.cancelForEvents([updatedEvent.id]);
+  const leadSource = resolveUpdatedReminderLeadSource(input.action.patch, existingJobs);
+  const leads =
+    leadSource === "at_start"
+      ? [0]
+      : explicitReminder
+        ? normalizeLeadMinutes(input.action.patch.reminderMinutes, input.defaultLeads)
+        : [...new Set(existingJobs.map((job) => job.leadMinutes))];
+
+  if (leads.length === 0 && leadSource !== "at_start") return;
+  await input.store.addMany(buildWechatReminderJobs(updatedEvent, leads, leadSource ? { leadSource } : {}));
+}
+
+function resolveUpdatedReminderLeadSource(
+  patch: UpdateEventPatch,
+  existingJobs: Awaited<ReturnType<WechatReminderStore["list"]>>,
+): "explicit" | "at_start" | undefined {
+  if (patch.reminderAtStart === true) return "at_start";
+  if (patch.reminderMinutes !== undefined) return "explicit";
+  if (existingJobs.some((job) => job.leadSource === "at_start")) return "at_start";
+  if (existingJobs.some((job) => job.leadSource === "explicit" || !DEFAULT_WECHAT_REMINDER_LEAD_MINUTES.includes(job.leadMinutes))) return "explicit";
+  return undefined;
+}
+
 async function completeCreatedSeedSources(action: CalendarAction, seedStore: SeedLiteStore | undefined, state: ShortTermStateStore) {
   if (action.type === "create_event") {
     await completeSeedLiteSources(action.event.sourceIds || [], seedStore, state);
@@ -1163,6 +1338,71 @@ function fillPatchDateFromLastEvent<T extends UpdateEventPatch>(patch: T, date: 
 
 function changesTimeWithoutDate(patch: UpdateEventPatch, stateDate: string | undefined): boolean {
   return !patch.date && !stateDate && Boolean(patch.startTime || patch.endTime);
+}
+
+async function fillUpdateEndTimeFromCalendar(input: {
+  patch: UpdateEventPatch;
+  eventId: string;
+  calendar: CalendarAdapter;
+}): Promise<UpdateEventPatch> {
+  if (!shouldFillEndTimeForMovedStart(input.patch)) return input.patch;
+  const date = input.patch.date;
+  if (!date) return input.patch;
+  const result = await input.calendar.listEvents({ date });
+  if (result.ok) {
+    const event = result.data.find((candidate) => candidate.id === input.eventId);
+    if (event) return fillUpdateEndTimeForMovedStart(input.patch, event);
+  }
+
+  return { ...input.patch, endTime: addMinutesToClockTime(date, input.patch.startTime, 60).time };
+}
+
+function fillUpdateEndTimeForMovedStart<T extends UpdateEventPatch>(patch: T, event: FeishuCalendarEvent): T {
+  if (!shouldFillEndTimeForMovedStart(patch)) return patch;
+  const date = patch.date;
+  const startTime = patch.startTime;
+  if (!date || !startTime) return patch;
+
+  const currentStart = parseEventStart(event.start);
+  const currentEnd = parseEventStart(event.end);
+  const durationMinutes = readPositiveDurationMinutes(currentStart.date, currentStart.startTime, currentEnd.date, currentEnd.startTime) || 60;
+  const nextEnd = addMinutesToClockTime(date, startTime, durationMinutes);
+
+  return { ...patch, endTime: nextEnd.time };
+}
+
+function shouldFillEndTimeForMovedStart(patch: UpdateEventPatch): patch is UpdateEventPatch & { date: string; startTime: string } {
+  return Boolean(patch.date && patch.startTime && !patch.endTime);
+}
+
+function readPositiveDurationMinutes(startDate?: string, startTime?: string, endDate?: string, endTime?: string): number | undefined {
+  if (!startDate || !startTime || !endTime) return undefined;
+  const startAt = Date.parse(`${startDate}T${normalizeClockTime(startTime)}+08:00`);
+  const endAt = Date.parse(`${endDate || startDate}T${normalizeClockTime(endTime)}+08:00`);
+  if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) return undefined;
+  return Math.round((endAt - startAt) / 60_000);
+}
+
+function addMinutesToClockTime(date: string, time: string, minutes: number): { date: string; time: string } {
+  const next = new Date(Date.parse(`${date}T${normalizeClockTime(time)}+08:00`) + minutes * 60_000);
+  const dateText = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(next);
+  const timeText = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(next);
+
+  return { date: dateText, time: timeText };
+}
+
+function normalizeClockTime(time: string): string {
+  return time.length === 5 ? `${time}:00` : time;
 }
 
 // 默认日期只作为兜底；测试和定时日报应显式注入 today。

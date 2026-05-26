@@ -5,7 +5,7 @@ import type { DecisionClient } from "../src/decision/index.js";
 import { createMemoryMemoryDreamStore } from "../src/memory-dream/index.js";
 import { createMemorySeedLiteStore } from "../src/seed-lite/index.js";
 import { createShortTermStateStore } from "../src/state/index.js";
-import { createMemoryWechatReminderStore } from "../src/wechat-reminder/index.js";
+import { DEFAULT_WECHAT_REMINDER_LEAD_MINUTES, buildWechatReminderJobs, createMemoryWechatReminderStore } from "../src/wechat-reminder/index.js";
 
 function createFakeCalendar(): CalendarAdapter {
   const events: Array<{ id: string; title: string; start: string; end?: string }> = [];
@@ -43,7 +43,11 @@ function decisionClient(decision: unknown): DecisionClient {
 describe("handleCalendarAgentRequest", () => {
   it("summarizes unfinished assistant context without touching calendar", async () => {
     let listCalls = 0;
-    const seedStore = createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理路演材料", reminderAt: "2026-05-16 14:00" }]);
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理路演材料", reminderAt: "2026-05-16 14:00" },
+      { seedId: "seed_2", title: "订 1011 的 PS", targetDate: "2026-05-17" },
+      { seedId: "seed_3", title: "拿币" },
+    ]);
     const state = createShortTermStateStore({
       pending_clarification: {
         question: "这个日程几点开始？",
@@ -80,13 +84,34 @@ describe("handleCalendarAgentRequest", () => {
     });
 
     expect(result).toMatchObject({ ok: true, actionType: "status_overview", requestId: "req_status_overview" });
-    expect(result.reply).toContain("现在我这里还挂着这些事");
-    expect(result.reply).toContain("待补时间：和张总聊 BP");
-    expect(result.reply).toContain("待确认推荐：");
+    expect(result.reply).toContain("我现在帮你盯着 6 件事");
+    expect(result.reply).toContain("待补信息 1 件");
+    expect(result.reply).toContain("待确认 2 件");
+    expect(result.reply).toContain("待安排 1 件");
+    expect(result.reply).toContain("待提醒 1 件");
+    expect(result.reply).toContain("待推进 1 件");
+    expect(result.reply).toContain("待补信息：和张总聊 BP");
+    expect(result.reply).toContain("待确认：");
+    expect(result.reply).toContain("排程推荐：");
     expect(result.reply).toContain("看 DCF");
-    expect(result.reply).toContain("待确认删除：旧电话会");
+    expect(result.reply).toContain("删除确认：旧电话会");
+    expect(result.reply).toContain("待提醒：");
+    expect(result.reply).toContain("整理路演材料（2026-05-16 14:00）");
+    expect(result.reply).toContain("待安排：");
+    expect(result.reply).toContain("订 1011 的 PS（2026-05-17）");
     expect(result.reply).toContain("待推进：");
-    expect(result.reply).toContain("整理路演材料");
+    expect(result.reply).toContain("拿币");
+    expect(result.reply).toContain("待确认里的排程推荐可以说“确认第 1 个推荐位”");
+    expect(result.reply).toContain("待确认里的删除确认可以说“确认删除”或“取消删除”");
+    expect(result.reply).toContain("待推进里的第几个完成了");
+    expect(result.reply).toContain("待安排里的第几个今天下午");
+    expect(result.reply).toContain("待提醒里的第几个不用提醒");
+    expect(result.reply).toContain("待提醒里的第几个提前 2 小时");
+    expect(result.reply).toContain("待推进里的第几个先不管");
+    expect(result.reply).not.toContain("排程推荐可以回“选 1”确认");
+    expect(result.reply).not.toContain("或“提醒提前 2 小时”");
+    expect(result.reply).not.toContain("或“第二个先不管”");
+    expect(state.snapshot().seed_items).toHaveLength(3);
     expect(listCalls).toBe(0);
   });
 
@@ -235,6 +260,67 @@ describe("handleCalendarAgentRequest", () => {
     });
   });
 
+  it("keeps shelved todos separate from active decision state before model routing", async () => {
+    const capturedStates: unknown[] = [];
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "第一个完成了",
+      requestId: "req_seed_state_shelved_split",
+      state: createShortTermStateStore(),
+      decisionClient: {
+        decide: async (request) => {
+          capturedStates.push(request.state);
+          return { type: "manage_todos", operation: "complete", target: { itemNumber: 1 } };
+        },
+      },
+      calendar: createFakeCalendar(),
+      seedStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos" });
+    expect(result.reply).toContain("已完成待推进：拿币");
+    expect(capturedStates[0]).toMatchObject({
+      seed_items: [{ seedId: "seed_2", title: "拿币" }],
+      shelved_seed_items: [{ seedId: "seed_1", title: "整理材料", status: "shelved" }],
+    });
+  });
+
+  it("loads grouped watchlist items into decision state before model routing", async () => {
+    const capturedStates: unknown[] = [];
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "订票", reminderAt: "2026-05-18 09:00" },
+      { seedId: "seed_2", title: "体检", targetDate: "2026-05-19" },
+      { seedId: "seed_3", title: "整理清单" },
+      { seedId: "seed_4", title: "旧事项", status: "shelved" },
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "待提醒里的第一个不用提醒",
+      requestId: "req_grouped_watchlist_state_before_decision",
+      state: createShortTermStateStore(),
+      decisionClient: {
+        decide: async (request) => {
+          capturedStates.push(request.state);
+          return { type: "manage_todos", operation: "update", target: { group: "pending_reminder", itemNumber: 1 }, patch: { clearReminder: true } };
+        },
+      },
+      calendar: createFakeCalendar(),
+      seedStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos" });
+    expect(capturedStates[0]).toMatchObject({
+      pending_reminder_seed_items: [{ seedId: "seed_1", title: "订票", reminderAt: "2026-05-18 09:00" }],
+      pending_schedule_seed_items: [{ seedId: "seed_2", title: "体检", targetDate: "2026-05-19" }],
+      pending_todo_seed_items: [{ seedId: "seed_3", title: "整理清单" }],
+      shelved_seed_items: [{ seedId: "seed_4", title: "旧事项", status: "shelved" }],
+    });
+  });
+
   it("clears a todo reminder while keeping the inbox item", async () => {
     const seedStore = createMemorySeedLiteStore([
       { seedId: "seed_1", title: "拿币" },
@@ -263,6 +349,209 @@ describe("handleCalendarAgentRequest", () => {
     ]);
   });
 
+  it("targets one item inside the pending reminder group without clearing the whole group", async () => {
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "订票", reminderAt: "2026-05-18 09:00" },
+      { seedId: "seed_2", title: "体检", reminderAt: "2026-05-19 08:00" },
+      { seedId: "seed_3", title: "整理清单" },
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "待提醒里的第二个不用提醒",
+      requestId: "req_todo_clear_one_pending_reminder_group_item",
+      state: createShortTermStateStore(),
+      seedStore,
+      decisionClient: decisionClient({
+        type: "manage_todos",
+        operation: "update",
+        target: { group: "pending_reminder", itemNumber: 2 },
+        patch: { clearReminder: true },
+      }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_clear_one_pending_reminder_group_item" });
+    expect(result.reply).toContain("已关闭提醒：体检");
+    expect(result.reply).toContain("事项还在待推进，可以说“看看待推进收件箱”继续处理。");
+    await expect(seedStore.list()).resolves.toEqual([
+      { seedId: "seed_1", title: "订票", reminderAt: "2026-05-18 09:00" },
+      { seedId: "seed_2", title: "体检" },
+      { seedId: "seed_3", title: "整理清单" },
+    ]);
+  });
+
+  it("shelves a pulled-back todo without deleting it", async () => {
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "第一个先不管",
+      requestId: "req_todo_shelve",
+      state: createShortTermStateStore(),
+      seedStore,
+      decisionClient: decisionClient({
+        type: "manage_todos",
+        operation: "shelve",
+        target: { itemNumber: 1 },
+      }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_shelve" });
+    expect(result.reply).toContain("已搁置待推进：整理材料");
+    expect(result.reply).toContain("之后可以说“看看搁置区”或“搁置区第几个恢复”。");
+    await expect(seedStore.list()).resolves.toEqual([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+  });
+
+  it("keeps shelved todos out of the active watchlist", async () => {
+    const result = await handleCalendarAgentRequest({
+      text: "看看现在盯着什么",
+      requestId: "req_todo_shelved_overview",
+      state: createShortTermStateStore(),
+      seedStore: createMemorySeedLiteStore([
+        { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+        { seedId: "seed_2", title: "拿币" },
+      ]),
+      decisionClient: decisionClient({ type: "status_overview" }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "status_overview", requestId: "req_todo_shelved_overview" });
+    expect(result.reply).toContain("待推进 1 件");
+    expect(result.reply).toContain("拿币");
+    expect(result.reply).not.toContain("整理材料（2026-05-13）");
+    expect(result.reply).toContain("搁置区还有 1 件，可以说“看看搁置区”或“搁置区第几个恢复”。");
+    expect(result.reply).not.toContain("搁置区还有 1 件，可以说“看看搁置区”。");
+  });
+
+  it("lists shelved todos separately from the active inbox", async () => {
+    const result = await handleCalendarAgentRequest({
+      text: "我搁置了什么？",
+      requestId: "req_todo_shelved_list",
+      state: createShortTermStateStore(),
+      seedStore: createMemorySeedLiteStore([
+        { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+        { seedId: "seed_2", title: "拿币" },
+      ]),
+      decisionClient: decisionClient({ type: "manage_todos", operation: "list_shelved" }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_shelved_list" });
+    expect(result.reply).toContain("搁置区：");
+    expect(result.reply).toContain("整理材料（2026-05-13）");
+    expect(result.reply).toContain("搁置区第几个恢复");
+    expect(result.reply).not.toContain("可以直接说“第几个恢复”");
+    expect(result.reply).not.toContain("拿币");
+  });
+
+  it("keeps a shelved inbox entry visible when the active inbox is empty", async () => {
+    const result = await handleCalendarAgentRequest({
+      text: "看看待推进收件箱",
+      requestId: "req_todo_active_empty_shelved_hint",
+      state: createShortTermStateStore(),
+      seedStore: createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" }]),
+      decisionClient: decisionClient({ type: "manage_todos", operation: "list" }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_active_empty_shelved_hint" });
+    expect(result.reply).toContain("现在没有待推进。");
+    expect(result.reply).toContain("搁置区还有 1 件，可以说“看看搁置区”或“搁置区第几个恢复”。");
+  });
+
+  it("keeps the active inbox visible when the shelved inbox is empty", async () => {
+    const result = await handleCalendarAgentRequest({
+      text: "看看搁置区",
+      requestId: "req_todo_shelved_empty_active_hint",
+      state: createShortTermStateStore(),
+      seedStore: createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" }]),
+      decisionClient: decisionClient({ type: "manage_todos", operation: "list_shelved" }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_shelved_empty_active_hint" });
+    expect(result.reply).toContain("搁置区现在没有事项。");
+    expect(result.reply).toContain("还有 1 件待推进，可以说“看看待推进收件箱”继续处理。");
+  });
+
+  it("restores a shelved todo without creating a calendar event", async () => {
+    let calendarCalls = 0;
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+    const calendar: CalendarAdapter = {
+      async createEvent() {
+        calendarCalls += 1;
+        return { ok: false, code: "api_error", message: "不应该创建日历。" };
+      },
+      async listEvents() {
+        calendarCalls += 1;
+        return { ok: true, data: [] };
+      },
+      async updateEvent() {
+        calendarCalls += 1;
+        return { ok: false, code: "api_error", message: "不应该修改日历。" };
+      },
+      async deleteEvent() {
+        calendarCalls += 1;
+        return { ok: false, code: "api_error", message: "不应该删除日历。" };
+      },
+    };
+
+    const result = await handleCalendarAgentRequest({
+      text: "把第一个恢复",
+      requestId: "req_todo_restore_shelved",
+      state: createShortTermStateStore(),
+      seedStore,
+      decisionClient: decisionClient({ type: "manage_todos", operation: "restore", target: { itemNumber: 1 } }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_restore_shelved" });
+    expect(result.reply).toContain("已恢复待推进：整理材料");
+    expect(result.reply).toContain("之后可以说“看看待推进收件箱”继续处理。");
+    expect(calendarCalls).toBe(0);
+    await expect(seedStore.list()).resolves.toEqual([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+  });
+
+  it("keeps restore failures scoped to the shelved inbox", async () => {
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "搁置区第三个恢复",
+      requestId: "req_todo_restore_missing_shelved",
+      state: createShortTermStateStore(),
+      seedStore,
+      decisionClient: decisionClient({ type: "manage_todos", operation: "restore", target: { itemNumber: 3 } }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: false, actionType: "manage_todos", requestId: "req_todo_restore_missing_shelved" });
+    expect(result.reply).toContain("没有找到第 3 个搁置项");
+    expect(result.reply).toContain("当前搁置区：");
+    expect(result.reply).toContain("1. 整理材料（2026-05-13）");
+    expect(result.reply).toContain("搁置区第几个恢复");
+    expect(result.reply).not.toContain("当前待推进收件箱");
+    expect(result.reply).not.toContain("待安排里的第几个安排一下");
+    await expect(seedStore.list()).resolves.toEqual([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-13", status: "shelved" },
+      { seedId: "seed_2", title: "拿币" },
+    ]);
+  });
+
   it("does not treat a far future todo reminder as a disabled reminder", async () => {
     const seedStore = createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理 DCF", reminderAt: "2026-05-18 14:00" }]);
 
@@ -282,7 +571,31 @@ describe("handleCalendarAgentRequest", () => {
 
     expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_far_future_reminder" });
     expect(result.reply).toContain("提醒：2026-12-31 23:59");
+    expect(result.reply).toContain("之后可以说“待提醒里的第几个不用提醒”或“待提醒里的第几个提前 2 小时”。");
     await expect(seedStore.list()).resolves.toEqual([{ seedId: "seed_1", title: "整理 DCF", reminderAt: "2026-12-31 23:59" }]);
+  });
+
+  it("offers scheduling follow up after setting a todo target date", async () => {
+    const seedStore = createMemorySeedLiteStore([{ seedId: "seed_1", title: "整理材料" }]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "第一个下周处理",
+      requestId: "req_todo_set_target_date_follow_up",
+      state: createShortTermStateStore(),
+      seedStore,
+      decisionClient: decisionClient({
+        type: "manage_todos",
+        operation: "update",
+        target: { itemNumber: 1 },
+        patch: { targetDate: "2026-05-25" },
+      }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_set_target_date_follow_up" });
+    expect(result.reply).toContain("已更新待推进：整理材料（2026-05-25）");
+    expect(result.reply).toContain("之后可以说“待安排里的第几个安排一下”或“待安排的都给我推荐一下”。");
+    await expect(seedStore.list()).resolves.toEqual([{ seedId: "seed_1", title: "整理材料", targetDate: "2026-05-25" }]);
   });
 
   it("schedules a visible inbox item by todo target and completes only that item", async () => {
@@ -366,6 +679,7 @@ describe("handleCalendarAgentRequest", () => {
     expect(result.reply).toContain("没有找到第 3 个待推进");
     expect(result.reply).toContain("当前待推进收件箱");
     expect(result.reply).toContain("1. 拿币");
+    expect(result.reply).toContain("待推进里的第几个完成了");
   });
 
   it("uses the todo target date when scheduling an inbox item without an explicit date", async () => {
@@ -569,6 +883,111 @@ describe("handleCalendarAgentRequest", () => {
 
     await expect(reminderStore.list()).resolves.toMatchObject([
       { eventId: "evt_1", leadMinutes: 120 },
+    ]);
+  });
+
+  it("registers multiple explicit WeChat reminders for an important created event", async () => {
+    const reminderStore = createMemoryWechatReminderStore();
+
+    await handleCalendarAgentRequest({
+      text: "明天下午三点见张总，这个比较重要，再提前提醒一次",
+      state: createShortTermStateStore(),
+      decisionClient: decisionClient({
+        action: "create_event",
+        event: { title: "见张总", date: "2026-05-09", startTime: "15:00", reminderMinutes: [120, 40] },
+      }),
+      calendar: createFakeCalendar(),
+      wechatReminderStore: reminderStore,
+    });
+
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_1", leadMinutes: 120 },
+      { eventId: "evt_1", leadMinutes: 40 },
+    ]);
+  });
+
+  it("refreshes pending WeChat reminders to multiple explicit leads", async () => {
+    const state = createShortTermStateStore({
+      last_event: { eventId: "evt_1", title: "见张总", date: "2026-05-09", startTime: "15:00" },
+    });
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "见张总", date: "2026-05-09", startTime: "15:00" });
+    const reminderStore = createMemoryWechatReminderStore(
+      buildWechatReminderJobs({ id: "evt_1", title: "见张总", start: "2026-05-09 15:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    );
+
+    const result = await handleCalendarAgentRequest({
+      text: "刚才那个比较重要，再提前提醒一次",
+      state,
+      decisionClient: decisionClient({
+        action: "update_event",
+        target: { kind: "last_event", eventId: "ignored_by_state" },
+        patch: { reminderMinutes: [120, 40] },
+      }),
+      calendar,
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event" });
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_1", leadMinutes: 120, status: "pending" },
+      { eventId: "evt_1", leadMinutes: 40, status: "pending" },
+    ]);
+  });
+
+  it("refreshes pending WeChat reminders when updating an event reminder lead", async () => {
+    const state = createShortTermStateStore({
+      last_event: { eventId: "evt_1", title: "见张总", date: "2026-05-09", startTime: "15:00" },
+    });
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "见张总", date: "2026-05-09", startTime: "15:00" });
+    const reminderStore = createMemoryWechatReminderStore(
+      buildWechatReminderJobs({ id: "evt_1", title: "见张总", start: "2026-05-09 15:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    );
+
+    const result = await handleCalendarAgentRequest({
+      text: "刚才那个提前两小时提醒我",
+      state,
+      decisionClient: decisionClient({
+        action: "update_event",
+        target: { kind: "last_event", eventId: "ignored_by_state" },
+        patch: { reminderMinutes: 120 },
+      }),
+      calendar,
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event" });
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_1", leadMinutes: 120, status: "pending" },
+    ]);
+  });
+
+  it("moves existing WeChat reminders when updating an event time", async () => {
+    const state = createShortTermStateStore({
+      last_event: { eventId: "evt_1", title: "见张总", date: "2026-05-09", startTime: "15:00" },
+    });
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "见张总", date: "2026-05-09", startTime: "15:00" });
+    const reminderStore = createMemoryWechatReminderStore(
+      buildWechatReminderJobs({ id: "evt_1", title: "见张总", start: "2026-05-09 15:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    );
+
+    const result = await handleCalendarAgentRequest({
+      text: "刚才那个改到四点",
+      state,
+      decisionClient: decisionClient({
+        type: "update_event",
+        target: { kind: "last_event" },
+        patch: { startTime: "16:00" },
+      }),
+      calendar,
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event" });
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_1", start: "2026-05-09 16:00", leadMinutes: 40, status: "pending" },
     ]);
   });
 
@@ -1291,6 +1710,7 @@ describe("handleCalendarAgentRequest", () => {
     const seedStore = createMemorySeedLiteStore([
       { seedId: "seed_1", title: "拿币", createdAt: "2026-05-14T09:00:00+08:00" },
       { seedId: "seed_2", title: "整理材料", targetDate: "2026-05-18" },
+      { seedId: "seed_3", title: "订票", reminderAt: "2026-05-18 09:00" },
     ]);
     let createCalls = 0;
 
@@ -1314,7 +1734,13 @@ describe("handleCalendarAgentRequest", () => {
     expect(result.reply).toContain("1. 拿币");
     expect(result.reply).toContain("2. 整理材料");
     expect(result.reply).toContain("2026-05-18");
+    expect(result.reply).toContain("3. 订票（提醒：2026-05-18 09:00）");
     expect(result.reply).toContain("可以直接说");
+    expect(result.reply).toContain("待推进里的第几个完成了");
+    expect(result.reply).toContain("待安排里的第几个安排一下");
+    expect(result.reply).toContain("待提醒里的第几个不用提醒");
+    expect(result.reply).not.toContain("第几个完成了”“第几个明天处理”“把第几个安排一下");
+    expect(result.reply).not.toContain("这个先别提醒");
     expect(createCalls).toBe(0);
   });
 
@@ -1336,9 +1762,10 @@ describe("handleCalendarAgentRequest", () => {
     });
 
     expect(briefing).toMatchObject({ ok: true, actionType: "daily_briefing", requestId: "req_workbench" });
-    expect(briefing.reply).toContain("待推进收件箱");
+    expect(briefing.reply).toContain("待处理工作台");
+    expect(briefing.reply).toContain("待推进");
     expect(briefing.reply).toContain("2. 整理材料");
-    expect(briefing.reply).toContain("可以直接说");
+    expect(briefing.reply).toContain("第几个完成了");
 
     const completed = await handleCalendarAgentRequest({
       text: "第二个完成了",
@@ -1351,6 +1778,37 @@ describe("handleCalendarAgentRequest", () => {
 
     expect(completed).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_workbench_complete" });
     await expect(seedStore.list()).resolves.toEqual([{ seedId: "seed_1", title: "拿币" }]);
+  });
+
+  it("schedules all pending schedule inbox items through a group target", async () => {
+    const state = createShortTermStateStore();
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "整理材料", targetDate: "2026-05-14" },
+      { seedId: "seed_2", title: "订 1011 的 PS", reminderAt: "2026-05-14 08:00" },
+      { seedId: "seed_3", title: "拿币" },
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "待安排的都给我推荐一下",
+      requestId: "req_schedule_pending_schedule_group",
+      state,
+      seedStore,
+      decisionClient: decisionClient({
+        type: "propose_schedule",
+        date: "2026-05-14",
+        preferredWindow: "afternoon",
+        items: [{ target: { group: "pending_schedule" } }],
+      }),
+      calendar: createFakeCalendar(),
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "propose_schedule", requestId: "req_schedule_pending_schedule_group" });
+    expect(result.reply).toContain("整理材料");
+    expect(result.reply).not.toContain("订 1011 的 PS");
+    expect(result.reply).not.toContain("拿币");
+    expect(state.snapshot().pending_schedule?.options[0]?.items).toEqual([
+      expect.objectContaining({ title: "整理材料", sourceIds: ["seed_1"] }),
+    ]);
   });
 
   it("shows current inbox options when a todo target cannot be resolved", async () => {
@@ -1371,6 +1829,7 @@ describe("handleCalendarAgentRequest", () => {
     expect(result.reply).toContain("当前待推进收件箱");
     expect(result.reply).toContain("1. 拿币");
     expect(result.reply).toContain("2. 整理材料");
+    expect(result.reply).toContain("待推进里的第几个完成了");
   });
 
   it("uses a natural capture reply when the user only wants to remember a todo", async () => {
@@ -1407,6 +1866,7 @@ describe("handleCalendarAgentRequest", () => {
 
     expect(completed).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_complete" });
     expect(completed.reply).toContain("已完成待推进：拿币");
+    expect(completed.reply).toContain("还有 2 件待推进，可以说“看看待推进收件箱”继续处理。");
     await expect(seedStore.list()).resolves.toEqual([
       { seedId: "seed_2", title: "整理材料" },
       { seedId: "seed_3", title: "写邮件" },
@@ -1423,6 +1883,7 @@ describe("handleCalendarAgentRequest", () => {
 
     expect(deleted).toMatchObject({ ok: true, actionType: "manage_todos", requestId: "req_todo_delete" });
     expect(deleted.reply).toContain("已取消待推进：写邮件");
+    expect(deleted.reply).toContain("还有 1 件待推进，可以说“看看待推进收件箱”继续处理。");
     await expect(seedStore.list()).resolves.toEqual([{ seedId: "seed_2", title: "整理材料" }]);
 
     const updated = await handleCalendarAgentRequest({
@@ -1528,6 +1989,8 @@ describe("handleCalendarAgentRequest", () => {
 
     expect(result).toMatchObject({ ok: false, actionType: "manage_todos", requestId: "req_todo_ambiguous" });
     expect(result.reply).toContain("找到多个待推进");
+    expect(result.reply).toContain("请说对应分组里的第几个");
+    expect(result.reply).not.toContain("请说第几个。");
     await expect(seedStore.list()).resolves.toEqual([
       { seedId: "seed_1", title: "整理材料" },
       { seedId: "seed_2", title: "整理路演材料" },
@@ -1650,7 +2113,7 @@ describe("handleCalendarAgentRequest", () => {
     });
 
     expect(result).toMatchObject({ ok: true, actionType: "update_event", requestId: "req_update_time" });
-    expect(receivedPatch).toEqual({ date: "2026-05-08", startTime: "21:00" });
+    expect(receivedPatch).toEqual({ date: "2026-05-08", startTime: "21:00", endTime: "22:00" });
   });
 
   it("fails closed for time-only updates when last_event has no date", async () => {
@@ -1706,6 +2169,24 @@ describe("handleCalendarAgentRequest", () => {
       state,
       decisionClient: decisionClient({ action: "list_events", date: "2026-05-09" }),
       calendar,
+    });
+
+    expect(state.snapshot().briefing_items).toEqual([
+      { itemNumber: 1, eventId: "evt_1", title: "电话会", date: "2026-05-09", startTime: "10:00" },
+    ]);
+  });
+
+  it("keeps the queried date in listed time-only events for later item-number updates", async () => {
+    const state = createShortTermStateStore();
+
+    await handleCalendarAgentRequest({
+      text: "查一下明天日程",
+      state,
+      decisionClient: decisionClient({ action: "list_events", date: "2026-05-09" }),
+      calendar: {
+        ...createFakeCalendar(),
+        listEvents: async () => ({ ok: true, data: [{ id: "evt_1", title: "电话会", start: "10:00" }] }),
+      },
     });
 
     expect(state.snapshot().briefing_items).toEqual([
@@ -2412,6 +2893,222 @@ describe("handleCalendarAgentRequest", () => {
     });
   });
 
+  it("uses reminder override when confirming a recommended schedule slot", async () => {
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const reminderStore = createMemoryWechatReminderStore();
+
+    const result = await handleCalendarAgentRequest({
+      text: "这个提前两小时提醒我",
+      requestId: "req_confirm_schedule_reminder_override",
+      state,
+      decisionClient: decisionClient({ type: "confirm_schedule", confirmed: true, itemChanges: [{ reminderMinutes: 120 }] }),
+      calendar: createFakeCalendar(),
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_confirm_schedule_reminder_override" });
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_1", title: "看材料", leadMinutes: 120 },
+    ]);
+  });
+
+  it("registers the default WeChat reminder when confirming a recommended schedule slot", async () => {
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const reminderStore = createMemoryWechatReminderStore();
+
+    const result = await handleCalendarAgentRequest({
+      text: "确认",
+      requestId: "req_confirm_schedule_default_reminder",
+      state,
+      decisionClient: decisionClient({ type: "confirm_schedule", confirmed: true }),
+      calendar: createFakeCalendar(),
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_confirm_schedule_default_reminder" });
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_1", title: "看材料", leadMinutes: 40, status: "pending" },
+    ]);
+  });
+
+  it("records schedule reminder changes as memory dream feedback", async () => {
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const observations: unknown[] = [];
+
+    const result = await handleCalendarAgentRequest({
+      text: "这个不用提醒",
+      requestId: "req_schedule_reminder_feedback_observation",
+      state,
+      decisionClient: decisionClient({ type: "confirm_schedule", confirmed: true, itemChanges: [{ reminderMinutes: 0 }] }),
+      calendar: createFakeCalendar(),
+      memoryDreamStore: {
+        async load() {
+          return { observations: [], entries: [], dreamRuns: [] };
+        },
+        async save() {},
+        async addObservation(observation) {
+          observations.push(observation);
+          return { id: "obs_schedule_reminder_feedback", ...observation };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_schedule_reminder_feedback_observation" });
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        scheduleFeedback: expect.objectContaining({
+          kind: "schedule_reminder_changed",
+          preferredReminderMinutes: [0],
+          reasonCodes: ["schedule_feedback_reminder_disabled"],
+        }),
+      }),
+    );
+  });
+
+  it("records bounded multi-reminder schedule feedback for memory dream", async () => {
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const observations: unknown[] = [];
+
+    const result = await handleCalendarAgentRequest({
+      text: "这个比较重要，再提醒一次",
+      requestId: "req_schedule_multi_reminder_feedback",
+      state,
+      decisionClient: decisionClient({ type: "confirm_schedule", confirmed: true, itemChanges: [{ reminderMinutes: [10, 120, 40, 120, 5] }] }),
+      calendar: createFakeCalendar(),
+      memoryDreamStore: {
+        async load() {
+          return { observations: [], entries: [], dreamRuns: [] };
+        },
+        async save() {},
+        async addObservation(observation) {
+          observations.push(observation);
+          return { id: "obs_schedule_multi_reminder_feedback", ...observation };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_schedule_multi_reminder_feedback" });
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        scheduleFeedback: expect.objectContaining({
+          kind: "schedule_reminder_changed",
+          preferredReminderMinutes: [120, 40, 10],
+          reasonCodes: ["schedule_feedback_reminder_changed"],
+        }),
+      }),
+    );
+  });
+
+  it("records schedule time changes as memory dream feedback", async () => {
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const observations: unknown[] = [];
+
+    const result = await handleCalendarAgentRequest({
+      text: "改成 11 点",
+      requestId: "req_schedule_feedback_observation",
+      state,
+      decisionClient: decisionClient({ type: "confirm_schedule", confirmed: true, itemChanges: [{ startTime: "11:00" }] }),
+      calendar: createFakeCalendar(),
+      memoryDreamStore: {
+        async load() {
+          return { observations: [], entries: [], dreamRuns: [] };
+        },
+        async save() {},
+        async addObservation(observation) {
+          observations.push(observation);
+          return { id: "obs_schedule_feedback", ...observation };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_schedule_feedback_observation" });
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        scheduleFeedback: expect.objectContaining({
+          kind: "schedule_time_changed",
+          preferredStartTimes: ["11:00"],
+          reasonCodes: ["schedule_feedback_changed_time"],
+        }),
+      }),
+    );
+  });
+
+  it("records schedule date changes as memory dream feedback", async () => {
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const observations: unknown[] = [];
+
+    const result = await handleCalendarAgentRequest({
+      text: "明天吧",
+      requestId: "req_schedule_date_feedback_observation",
+      state,
+      decisionClient: decisionClient({ type: "confirm_schedule", confirmed: true, itemChanges: [{ date: "2026-05-13" }] }),
+      calendar: createFakeCalendar(),
+      memoryDreamStore: {
+        async load() {
+          return { observations: [], entries: [], dreamRuns: [] };
+        },
+        async save() {},
+        async addObservation(observation) {
+          observations.push(observation);
+          return { id: "obs_schedule_date_feedback", ...observation };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_schedule_date_feedback_observation" });
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        scheduleFeedback: expect.objectContaining({
+          kind: "schedule_time_changed",
+          targetDate: "2026-05-13",
+          reasonCodes: ["schedule_feedback_changed_date"],
+        }),
+      }),
+    );
+  });
+
   it("reproposes a pending schedule for a later preference without writing calendar", async () => {
     const state = createShortTermStateStore({
       pending_schedule: {
@@ -2471,6 +3168,37 @@ describe("handleCalendarAgentRequest", () => {
       date: "2026-05-14",
     });
     expect(state.snapshot().pending_schedule?.options[0]?.items[0]?.startTime).not.toBe("10:00");
+  });
+
+  it("keeps a pending schedule stable when the follow-up has no new constraints", async () => {
+    let listCalls = 0;
+    const state = createShortTermStateStore({
+      pending_schedule: {
+        date: "2026-05-12",
+        options: [
+          { optionNumber: 1, items: [{ itemNumber: 1, title: "看材料", date: "2026-05-12", startTime: "10:00", endTime: "11:00", durationMinutes: 60 }] },
+        ],
+      },
+    });
+    const calendar: CalendarAdapter = {
+      ...createFakeCalendar(),
+      async listEvents() {
+        listCalls += 1;
+        return { ok: true, data: [] };
+      },
+    };
+
+    const result = await handleCalendarAgentRequest({
+      text: "刚才那个推荐再发我一下",
+      requestId: "req_schedule_stable_draft",
+      state,
+      decisionClient: decisionClient({ type: "propose_schedule", contextRef: "pending_schedule" }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "propose_schedule", requestId: "req_schedule_stable_draft" });
+    expect(result.reply).toContain("1. 2026-05-12 10:00 看材料");
+    expect(listCalls).toBe(0);
   });
 
   it("reproposes a pending schedule with the requested number of options", async () => {
@@ -2709,6 +3437,96 @@ describe("handleCalendarAgentRequest", () => {
     ]);
   });
 
+  it("refreshes recent event items after a briefing so numbered follow-up updates use the visible list", async () => {
+    const state = createShortTermStateStore({
+      recent_event_items: [
+        { itemNumber: 1, eventId: "evt_old_1", title: "国金", date: "2026-05-26", startTime: "14:00" },
+        { itemNumber: 2, eventId: "evt_old_2", title: "基石dd", date: "2026-05-28", startTime: "10:00" },
+      ],
+    });
+    const events = [
+      { id: "evt_today_1", title: "锐盟交流", start: "2026-05-26 09:00" },
+      { id: "evt_today_2", title: "国金", start: "2026-05-26 14:00" },
+    ];
+    let updatedEventId = "";
+    const calendar: CalendarAdapter = {
+      ...createFakeCalendar(),
+      listEvents: async () => ({ ok: true, data: events }),
+      updateEvent: async (input) => {
+        updatedEventId = input.eventId;
+        const event = events.find((candidate) => candidate.id === input.eventId);
+        if (!event) return { ok: false, code: "not_found", message: "没有找到日程。" };
+        if (input.patch.date && input.patch.startTime) event.start = `${input.patch.date} ${input.patch.startTime}`;
+        return { ok: true, data: event };
+      },
+    };
+
+    await handleCalendarAgentRequest({
+      text: "今天什么安排",
+      requestId: "req_today_visible_list",
+      today: "2026-05-26",
+      state,
+      decisionClient: decisionClient({ action: "daily_briefing", briefingType: "morning" }),
+      calendar,
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "把第二个改到4点",
+      requestId: "req_update_visible_second",
+      today: "2026-05-26",
+      state,
+      decisionClient: decisionClient({
+        action: "update_event",
+        target: { kind: "recent_event_item", itemNumber: 2 },
+        patch: { startTime: "16:00" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event", requestId: "req_update_visible_second" });
+    expect(updatedEventId).toBe("evt_today_2");
+    expect(result.reply).toContain("2026年5月26日 星期二 16:00 国金");
+  });
+
+  it("sends an end time when moving a visible event by start time only so Feishu applies the change", async () => {
+    const state = createShortTermStateStore({
+      recent_event_items: [{ itemNumber: 1, eventId: "evt_1", title: "国金", date: "2026-05-26", startTime: "14:00" }],
+    });
+    const events = [{ id: "evt_1", title: "国金", start: "2026-05-26 14:00", end: "2026-05-26 15:00" }];
+    let receivedPatch: unknown;
+    const calendar: CalendarAdapter = {
+      ...createFakeCalendar(),
+      listEvents: async () => ({ ok: true, data: events }),
+      updateEvent: async (input) => {
+        receivedPatch = input.patch;
+        const event = events.find((candidate) => candidate.id === input.eventId);
+        if (!event) return { ok: false, code: "not_found", message: "没有找到日程。" };
+        if (input.patch.date && input.patch.startTime && input.patch.endTime) {
+          event.start = `${input.patch.date} ${input.patch.startTime}`;
+          event.end = `${input.patch.date} ${input.patch.endTime}`;
+        }
+        return { ok: true, data: event };
+      },
+    };
+
+    const result = await handleCalendarAgentRequest({
+      text: "今天下午2点的会改到4点",
+      requestId: "req_move_requires_end_time",
+      today: "2026-05-26",
+      state,
+      decisionClient: decisionClient({
+        action: "update_event",
+        target: { kind: "recent_event_item", itemNumber: 1 },
+        patch: { startTime: "16:00" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event", requestId: "req_move_requires_end_time" });
+    expect(receivedPatch).toEqual({ date: "2026-05-26", startTime: "16:00", endTime: "17:00" });
+    expect(result.reply).toContain("2026年5月26日 星期二 16:00 国金");
+  });
+
   it("handles evening briefing through the API bridge for tomorrow", async () => {
     const state = createShortTermStateStore();
     const calendar = createFakeCalendar();
@@ -2726,6 +3544,53 @@ describe("handleCalendarAgentRequest", () => {
     expect(result).toMatchObject({ ok: true, actionType: "daily_briefing", requestId: "req_evening_briefing" });
     expect(result.reply).toContain("晚报");
     expect(result.reply).toContain("董事会");
+  });
+
+  it("keeps the briefing target date for time-only event starts before follow-up updates", async () => {
+    const state = createShortTermStateStore();
+    const calendar: CalendarAdapter = {
+      ...createFakeCalendar(),
+      listEvents: async () => ({
+        ok: true,
+        data: [
+          { id: "evt_1", title: "上午会议", start: "09:30" },
+          { id: "evt_2", title: "沐曦-伊辛智能", start: "16:00" },
+        ],
+      }),
+      updateEvent: async (input) => ({
+        ok: true,
+        data: {
+          id: input.eventId,
+          title: "沐曦-伊辛智能",
+          start: input.patch.date && input.patch.startTime ? `${input.patch.date} ${input.patch.startTime}` : "2026-05-19 16:00",
+        },
+      }),
+    };
+
+    await handleCalendarAgentRequest({
+      text: "给我晚报",
+      requestId: "req_evening_time_only_briefing",
+      today: "2026-05-18",
+      state,
+      decisionClient: decisionClient({ action: "daily_briefing", briefingType: "evening" }),
+      calendar,
+    });
+
+    const result = await handleCalendarAgentRequest({
+      text: "把下午4点的改成上午10点",
+      requestId: "req_update_time_only_briefing_item",
+      state,
+      decisionClient: decisionClient({
+        action: "update_event",
+        target: { kind: "briefing_item", itemNumber: 2 },
+        patch: { startTime: "10:00" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_event", requestId: "req_update_time_only_briefing_item" });
+    expect(result.reply).toContain("10:00");
+    expect(result.reply).not.toContain("16:00 沐曦-伊辛智能");
   });
 
   it("updates a briefing item by resolving it to the real event id through the API bridge", async () => {
@@ -2844,6 +3709,33 @@ describe("handleCalendarAgentRequest", () => {
     expect(result.reply).toBe("已删除日程：\n2026年5月9日 星期六 10:00 电话会");
     expect(deletedEventId).toBe("evt_real");
     expect(state.snapshot().pending_delete).toBeUndefined();
+  });
+
+  it("cancels pending WeChat reminders after deleting a calendar event", async () => {
+    const state = createShortTermStateStore({
+      pending_delete: { eventId: "evt_real", title: "取快递", source: "last_event", date: "2026-05-17", startTime: "14:00" },
+    });
+    const reminderStore = createMemoryWechatReminderStore([
+      ...buildWechatReminderJobs({ id: "evt_real", title: "取快递", start: "2026-05-17 14:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+      ...buildWechatReminderJobs({ id: "evt_keep", title: "健身", start: "2026-05-17 19:00" }, DEFAULT_WECHAT_REMINDER_LEAD_MINUTES),
+    ]);
+
+    const result = await handleCalendarAgentRequest({
+      text: "确认删除",
+      requestId: "req_delete_confirm_cancel_reminder",
+      state,
+      decisionClient: decisionClient({ type: "confirm_delete", confirmed: true }),
+      calendar: {
+        ...createFakeCalendar(),
+        deleteEvent: async (input) => ({ ok: true, data: { eventId: input.eventId } }),
+      },
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "confirm_delete", requestId: "req_delete_confirm_cancel_reminder" });
+    await expect(reminderStore.list()).resolves.toMatchObject([
+      { eventId: "evt_keep", title: "健身", status: "pending" },
+    ]);
   });
 
   it("lets the model interpret pending delete confirmation before deleting", async () => {
@@ -3225,6 +4117,37 @@ describe("handleCalendarAgentRequest", () => {
       ok: true,
       data: [{ id: "evt_1", title: "健身", start: "2026-05-17 16:00" }],
     });
+  });
+
+  it("fails closed when Feishu returns an updated event that does not reflect the requested time", async () => {
+    const state = createShortTermStateStore({
+      recent_event_items: [{ itemNumber: 1, eventId: "evt_1", title: "国金", date: "2026-05-26", startTime: "14:00" }],
+    });
+    let updateCalls = 0;
+    const calendar: CalendarAdapter = {
+      ...createFakeCalendar(),
+      updateEvent: async (input) => {
+        updateCalls += 1;
+        return { ok: true, data: { id: input.eventId, title: "国金", start: "2026-05-26 14:00" } };
+      },
+    };
+
+    const result = await handleCalendarAgentRequest({
+      text: "把今天2点的会改到4点",
+      requestId: "req_stale_update_response",
+      state,
+      decisionClient: decisionClient({
+        type: "update_event",
+        target: { kind: "recent_event_item", itemNumber: 1 },
+        patch: { startTime: "16:00" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: false, actionType: "update_event", requestId: "req_stale_update_response" });
+    expect(result.reply).toContain("没有成功");
+    expect(result.reply).toContain("没有体现修改后的时间");
+    expect(updateCalls).toBe(1);
   });
 
   it("locks all events from an explicit date delete query before batch deletion", async () => {

@@ -50,7 +50,9 @@ export type TodoTarget = {
   itemNumber?: number;
   itemNumbers?: number[];
   title?: string;
+  group?: TodoTargetGroup;
 };
+export type TodoTargetGroup = "pending_schedule" | "pending_reminder" | "pending_todo" | "all";
 export type TodoPatch = {
   title?: string;
   targetDate?: string;
@@ -88,7 +90,8 @@ export type CalendarAction =
   | { type: "confirm_schedule"; confirmed: boolean; optionNumber?: number; itemChanges?: ScheduleItemChange[] }
   | { type: "remember_todo"; title: string; autoSchedule?: boolean; date?: string }
   | { type: "manage_todos"; operation: "list"; limit?: number }
-  | { type: "manage_todos"; operation: "complete" | "delete"; target: TodoTarget }
+  | { type: "manage_todos"; operation: "list_shelved"; limit?: number }
+  | { type: "manage_todos"; operation: "complete" | "delete" | "shelve" | "restore"; target: TodoTarget }
   | { type: "manage_todos"; operation: "update"; target: TodoTarget; patch: TodoPatch }
   | { type: "request_delete_event"; target: EventReference }
   | { type: "request_delete_events"; query: EventQuery }
@@ -223,15 +226,15 @@ function normalizeInternalSettingsSummary(value: Record<string, unknown>): Contr
 }
 
 function normalizeInternalManageTodos(value: Record<string, unknown>): ContractResult {
-  if (value.operation !== "list" && value.operation !== "complete" && value.operation !== "delete" && value.operation !== "update") {
+  if (value.operation !== "list" && value.operation !== "list_shelved" && value.operation !== "complete" && value.operation !== "delete" && value.operation !== "shelve" && value.operation !== "restore" && value.operation !== "update") {
     return clarify(["operation"]);
   }
-  if (value.operation === "list") {
+  if (value.operation === "list" || value.operation === "list_shelved") {
     return {
       ok: true,
       action: {
         type: "manage_todos",
-        operation: "list",
+        operation: value.operation,
         ...(Number.isInteger(value.limit) && Number(value.limit) > 0 ? { limit: Number(value.limit) } : {}),
       },
     };
@@ -471,8 +474,13 @@ function normalizeTodoTarget(value: Record<string, unknown>): TodoTarget | null 
     ...(Number.isInteger(value.itemNumber) && Number(value.itemNumber) > 0 ? { itemNumber: Number(value.itemNumber) } : {}),
     ...normalizeItemNumbersField(value.itemNumbers),
     ...(isNonEmptyString(value.title) ? { title: value.title.trim() } : {}),
+    ...(isTodoTargetGroup(value.group) ? { group: value.group } : {}),
   };
   return Object.keys(target).length > 0 ? target : null;
+}
+
+function isTodoTargetGroup(value: unknown): value is TodoTargetGroup {
+  return value === "pending_schedule" || value === "pending_reminder" || value === "pending_todo" || value === "all";
 }
 
 function normalizeItemNumbersField(value: unknown): { itemNumbers?: number[] } {
@@ -757,8 +765,9 @@ function optionalNumber(value: Record<string, unknown>, key: string): Record<str
 function optionalReminderMinutes(value: Record<string, unknown>): Record<string, number | number[]> {
   if (typeof value.reminderMinutes === "number") return { reminderMinutes: value.reminderMinutes };
   if (Array.isArray(value.reminderMinutes)) {
-    const minutes = value.reminderMinutes.filter((item): item is number => typeof item === "number");
-    return minutes.length > 0 ? { reminderMinutes: minutes } : {};
+    const minutes = [...new Set(value.reminderMinutes.filter((item): item is number => Number.isInteger(item) && item > 0))].sort((a, b) => b - a).slice(0, 3);
+    if (minutes.length > 0) return { reminderMinutes: minutes };
+    return value.reminderMinutes.some((item) => item === 0) ? { reminderMinutes: 0 } : {};
   }
   return {};
 }

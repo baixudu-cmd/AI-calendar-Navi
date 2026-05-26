@@ -171,7 +171,7 @@ type TodoAutoScheduleCase = {
 type TodoInboxCase = {
   id: string;
   text: string;
-  operation: "list" | "complete" | "delete" | "update";
+  operation: "list" | "list_shelved" | "complete" | "delete" | "shelve" | "restore" | "update";
   seedItems: SeedLiteItem[];
   expectedReplyIncludes: string[];
   expectedFinalSeedItems: AdvancedFinalSeedExpectation[];
@@ -514,7 +514,7 @@ function scheduleContextScenarios(): AdvancedRegressionScenario[] {
       secondText: "今天太满，明天吧",
       thirdText: "第一个可以",
       secondActionType: "propose_schedule",
-      expectedFinalEvents: [event("evt_1", "处理拿币", TOMORROW, "09:00", ["处理拿币", "拿币"])],
+      expectedFinalEvents: [event("evt_1", "处理拿币", TOMORROW, "09:00", ["处理拿币", "拿币"], ["09:00", "14:00"])],
     },
     {
       id: "006",
@@ -689,8 +689,8 @@ function buildDeleteScenario(item: DeleteCase, category: "delete_confirm" | "del
   };
 }
 
-function event(id: string, title: string, date: string, startTime: string, titles?: string[]): AdvancedFinalEventExpectation {
-  return { id, title, ...(titles ? { titles } : {}), date, startTime };
+function event(id: string, title: string, date: string, startTime: string, titles?: string[], startTimes?: string[]): AdvancedFinalEventExpectation {
+  return { id, title, ...(titles ? { titles } : {}), date, startTime, ...(startTimes ? { startTimes } : {}) };
 }
 
 function seedItem(seedId: string, title: string, targetDate?: string, reminderAt?: string): SeedLiteItem {
