@@ -13,7 +13,7 @@ The project keeps a simple boundary: the model understands the request, while de
 
 ## Features
 
-- Create single or batch calendar events from natural language.
+- Create single, batch, daily recurring, or weekly recurring calendar events from natural language.
 - Search, update, and delete calendar events with confirmation gates.
 - Capture unscheduled items in a lightweight todo inbox.
 - Generate schedule proposals from calendar availability.

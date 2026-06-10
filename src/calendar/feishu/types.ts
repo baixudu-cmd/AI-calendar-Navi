@@ -34,6 +34,7 @@ export type FeishuCalendarEvent = {
   end?: string;
   location?: string;
   notes?: string;
+  recurrence?: string;
 };
 
 export type FeishuCalendarErrorCode = "missing_config" | "api_error" | "network_error" | "not_found" | "invalid_response";
@@ -54,6 +55,7 @@ export type FeishuCreatePayload = {
   location?: { name: string };
   description?: string;
   reminders?: Array<{ minutes: number }>;
+  recurrence?: string;
 };
 
 export type FeishuUpdatePayload = Partial<FeishuCreatePayload>;

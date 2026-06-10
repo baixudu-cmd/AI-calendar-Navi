@@ -12,6 +12,7 @@ import {
 import { createImageDraftParserFromEnv, createImageDraftRequestOptions } from "../image-capture/index.js";
 import { evaluateLiveConfigGate, formatLiveConfigGateReport } from "../live/config-gate.js";
 import { createFileMemoryDreamStore } from "../memory-dream/index.js";
+import { createLocalAddressFetch } from "../net/local-address-fetch.js";
 import { createFileSeedLiteStore } from "../seed-lite/index.js";
 import { loadAppSettings } from "../settings/index.js";
 import { createShortTermStateStore } from "../state/index.js";
@@ -40,6 +41,9 @@ async function startServerWithLiveDependencies() {
     return;
   }
 
+  const feishuFetch = createLocalAddressFetch(process.env.NAVI_OUTBOUND_LOCAL_ADDRESS, process.env.NAVI_FEISHU_RESOLVE_IP);
+  const modelFetch = createLocalAddressFetch(process.env.NAVI_OUTBOUND_LOCAL_ADDRESS, process.env.NAVI_MODEL_RESOLVE_IP);
+
   const calendar = await createLiveFeishuCalendarAdapter({
     config: {
       appId: config.feishuAppId,
@@ -48,6 +52,7 @@ async function startServerWithLiveDependencies() {
       timezone: config.timezone,
       defaultAttendeeOpenId: config.feishuDefaultAttendeeOpenId,
     },
+    fetch: feishuFetch,
   });
 
   if (!calendar.ok) {
@@ -64,6 +69,7 @@ async function startServerWithLiveDependencies() {
         transport: createOpenAICompatibleTransport({
           baseUrl: config.modelBaseUrl || "",
           apiKey: config.modelApiKey || "",
+          fetch: modelFetch,
           requestOptions: createCalendarToolCallRequestOptions(),
         }),
       }),
@@ -79,6 +85,7 @@ async function startServerWithLiveDependencies() {
         transport: createOpenAICompatibleTransport({
           baseUrl: config.modelBaseUrl || "",
           apiKey: config.modelApiKey || "",
+          fetch: modelFetch,
           requestOptions: createImageDraftRequestOptions(),
         }),
       }), // 只有 IMAGE_CAPTURE_ENABLE_DRAFT=1 时才启用图片草稿解析。
@@ -87,6 +94,7 @@ async function startServerWithLiveDependencies() {
         transport: createOpenAICompatibleTransport({
           baseUrl: config.modelBaseUrl || "",
           apiKey: config.modelApiKey || "",
+          fetch: modelFetch,
           requestOptions: createClarifyRepairRequestOptions(),
         }),
       }),

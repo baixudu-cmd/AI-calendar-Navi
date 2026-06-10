@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createCalendarToolCallRequestOptions } from "../src/decision/model/index.js";
+import { TOOL_NAMES } from "../src/tool-contract/index.js";
 
 describe("calendar tool call structured output", () => {
   it("builds a json schema response format for calendar tool calls", () => {
@@ -13,12 +14,13 @@ describe("calendar tool call structured output", () => {
         json_schema: {
           name: "calendar_tool_call",
           schema: {
-            type: "object",
-            required: ["toolName", "arguments"],
-            properties: {
-              toolName: { type: "string" },
-              arguments: { type: "object" },
-            },
+              type: "object",
+              required: ["toolName", "arguments"],
+              additionalProperties: false,
+              properties: {
+                toolName: { type: "string", enum: TOOL_NAMES },
+                arguments: { type: "object" },
+              },
           },
         },
       },
@@ -26,12 +28,19 @@ describe("calendar tool call structured output", () => {
   });
 
   it("keeps execution result fields out of the structured output schema", () => {
-    const serialized = JSON.stringify(getCalendarToolCallSchema());
+    const schema = getCalendarToolCallSchema();
+    const executionResultFields = ["event_created", "success", "status", "message"];
 
-    expect(serialized).not.toContain("event_created");
-    expect(serialized).not.toContain("success");
-    expect(serialized).not.toContain("status");
-    expect(serialized).not.toContain("message");
+    for (const field of executionResultFields) {
+      expect(schema.required).not.toContain(field);
+      expect(Object.keys(schema.properties)).not.toContain(field);
+    }
+  });
+
+  it("keeps toolName bound to the model-visible tool registry", () => {
+    const schema = getCalendarToolCallSchema();
+
+    expect(schema.properties.toolName.enum).toEqual(TOOL_NAMES);
   });
 });
 

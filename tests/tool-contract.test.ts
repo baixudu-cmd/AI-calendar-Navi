@@ -9,11 +9,13 @@ describe("tool-contract schema registry", () => {
   it("exposes exactly the model-visible thin calendar tools", () => {
     expect(TOOL_NAMES).toEqual([
       "calendar.create_event",
+      "calendar.create_recurring_event",
       "calendar.create_reminder",
       "calendar.create_events",
       "calendar.create_and_propose_schedule",
       "calendar.list_events",
       "calendar.update_event",
+      "calendar.update_and_create_events",
       "calendar.propose_schedule",
       "calendar.confirm_schedule",
       "assistant.remember_todo",
@@ -43,10 +45,12 @@ describe("tool-contract schema registry", () => {
 
   it("declares required fields for create, update, and delete", () => {
     expect(TOOL_SCHEMAS["calendar.create_event"].parameters.required).toEqual(["title", "date", "startTime"]);
+    expect(TOOL_SCHEMAS["calendar.create_recurring_event"].parameters.required).toEqual(["title", "date", "startTime", "recurrence"]);
     expect(TOOL_SCHEMAS["calendar.create_reminder"].parameters.required).toEqual(["title", "date", "startTime"]);
     expect(TOOL_SCHEMAS["calendar.create_events"].parameters.required).toEqual(["events"]);
     expect(TOOL_SCHEMAS["calendar.create_and_propose_schedule"].parameters.required).toEqual(["events", "items"]);
     expect(TOOL_SCHEMAS["calendar.update_event"].parameters.required).toEqual(["target", "patch"]);
+    expect(TOOL_SCHEMAS["calendar.update_and_create_events"].parameters.required).toEqual(["updates", "events"]);
     expect(TOOL_SCHEMAS["calendar.propose_schedule"].parameters.required).toEqual([]);
     expect(TOOL_SCHEMAS["calendar.confirm_schedule"].parameters.required).toEqual(["confirmed"]);
     expect(TOOL_SCHEMAS["assistant.remember_todo"].parameters.required).toEqual(["title"]);
@@ -58,6 +62,10 @@ describe("tool-contract schema registry", () => {
     expect(TOOL_SCHEMAS["assistant.settings_summary"].parameters.required).toEqual([]);
     expect(TOOL_SCHEMAS["assistant.status_overview"].parameters.required).toEqual([]);
     expect(TOOL_SCHEMAS["assistant.dismiss_context"].parameters.required).toEqual([]);
+  });
+
+  it("exposes at-start reminders on recurring event creation schema", () => {
+    expect(TOOL_SCHEMAS["calendar.create_recurring_event"].parameters.properties.reminderAtStart).toEqual({ type: "boolean" });
   });
 
   it("exposes a read-only settings summary tool with topic narrowing", () => {
@@ -256,6 +264,138 @@ describe("validateToolCall", () => {
         arguments: { title: "见张总", date: "2026-05-09", startTime: "10:00", location: "上海" },
       },
     });
+  });
+
+  it("accepts valid recurring create and adapts it to an internal action", () => {
+    const daily = validateToolCall({
+      toolName: "calendar.create_recurring_event",
+      arguments: {
+        title: "站会",
+        date: "2026-06-01",
+        startTime: "09:00",
+        startTimeEvidence: "9点",
+        recurrence: { frequency: "daily", interval: 1 },
+      },
+    });
+
+    expect(daily).toEqual({
+      ok: true,
+      call: {
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", interval: 1 },
+        },
+      },
+    });
+    if (daily.ok) {
+      expect(toolCallToCalendarAction(daily.call)).toEqual({
+        type: "create_recurring_event",
+        event: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", interval: 1 },
+        },
+      });
+    }
+
+    expect(
+      validateToolCall({
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "例会",
+          date: "2026-06-01",
+          startTime: "10:00",
+          recurrence: { frequency: "weekly", interval: 1, byWeekday: ["MO", "WE"] },
+        },
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("accepts recurring at-start reminder creation from an inbox source", () => {
+    const result = validateToolCall(
+      {
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "吃药",
+          date: "2026-06-11",
+          startTime: "08:00",
+          startTimeEvidence: "每天早上8点",
+          recurrence: { frequency: "daily", interval: 1 },
+          reminderAtStart: true,
+          sourceIds: ["seed_1"],
+        },
+      },
+      { sourceText: "以后每天早上8点提醒我吃药" },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(toolCallToCalendarAction(result.call)).toEqual({
+        type: "create_recurring_event",
+        event: {
+          title: "吃药",
+          date: "2026-06-11",
+          startTime: "08:00",
+          recurrence: { frequency: "daily", interval: 1 },
+          reminderAtStart: true,
+          sourceIds: ["seed_1"],
+        },
+      });
+    }
+  });
+
+  it("rejects malformed recurring create arguments before execution", () => {
+    expect(
+      validateToolCall({
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "例会",
+          date: "2026-06-01",
+          startTime: "10:00",
+          recurrence: { frequency: "weekly", interval: 1 },
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: "invalid_arguments" });
+
+    expect(
+      validateToolCall({
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", interval: 1, byWeekday: ["MO"] },
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: "invalid_arguments" });
+
+    expect(
+      validateToolCall({
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { rrule: "FREQ=DAILY;INTERVAL=1" },
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: "invalid_arguments" });
+
+    expect(
+      validateToolCall({
+        toolName: "calendar.create_recurring_event",
+        arguments: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", count: 0 },
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: "invalid_arguments" });
   });
 
   it("accepts start time evidence with harmless spacing and full-width differences", () => {
@@ -811,14 +951,14 @@ describe("validateToolCall", () => {
   it("accepts remember_todo for natural no-time work items", () => {
     const result = validateToolCall({
       toolName: "assistant.remember_todo",
-      arguments: { title: "拿币", date: "2026-05-14", success: true },
+      arguments: { title: "拿币", date: "2026-05-14", preferredWindow: "afternoon", success: true },
     });
 
     expect(result).toEqual({
       ok: true,
       call: {
         toolName: "assistant.remember_todo",
-        arguments: { title: "拿币", autoSchedule: true, date: "2026-05-14" },
+        arguments: { title: "拿币", autoSchedule: true, date: "2026-05-14", preferredWindow: "afternoon" },
       },
     });
     if (result.ok) {
@@ -827,8 +967,18 @@ describe("validateToolCall", () => {
         title: "拿币",
         autoSchedule: true,
         date: "2026-05-14",
+        preferredWindow: "afternoon",
       });
     }
+  });
+
+  it("rejects invalid remember_todo preferred windows", () => {
+    expect(
+      validateToolCall({
+        toolName: "assistant.remember_todo",
+        arguments: { title: "拿币", preferredWindow: "no_morning" },
+      }),
+    ).toMatchObject({ ok: false, reason: "invalid_arguments" });
   });
 
   it("accepts manage_todos for inbox list, completion, deletion, shelve, and update", () => {
@@ -998,6 +1148,45 @@ describe("validateToolCall", () => {
     }
   });
 
+  it("accepts a combined update and create action for one user message", () => {
+    const result = validateToolCall(
+      {
+        toolName: "calendar.update_and_create_events",
+        arguments: {
+          updates: [
+            {
+              target: { kind: "event_query", date: "2026-06-11", startTime: "14:00", title: "天启" },
+              patch: { date: "2026-06-11", startTime: "09:30", endTime: "10:30" },
+            },
+          ],
+          events: [
+            {
+              title: "互动游戏",
+              date: "2026-06-11",
+              startTime: "14:00",
+              startTimeEvidence: "明天下午两点",
+            },
+          ],
+        },
+      },
+      { sourceText: "把明天下午2点的天启会议改成上午9:30，然后明天下午两点互动游戏" },
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(toolCallToCalendarAction(result.call)).toEqual({
+        type: "update_and_create_events",
+        updates: [
+          {
+            target: { kind: "event_query", date: "2026-06-11", startTime: "14:00", title: "天启" },
+            patch: { date: "2026-06-11", startTime: "09:30", endTime: "10:30" },
+          },
+        ],
+        events: [{ title: "互动游戏", date: "2026-06-11", startTime: "14:00" }],
+      });
+    }
+  });
+
   it("accepts update and delete with recent displayed event references", () => {
     const update = validateToolCall({
       toolName: "calendar.update_event",
@@ -1024,6 +1213,18 @@ describe("validateToolCall", () => {
         type: "request_delete_event",
         target: { kind: "recent_event_item", itemNumber: 3 },
       });
+    }
+  });
+
+  it("accepts a target date for daily briefing", () => {
+    const result = validateToolCall({
+      toolName: "calendar.daily_briefing",
+      arguments: { briefingType: "morning", date: "2026-06-11" },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(toolCallToCalendarAction(result.call)).toEqual({ type: "daily_briefing", briefingType: "morning", date: "2026-06-11" });
     }
   });
 

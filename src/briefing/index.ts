@@ -13,6 +13,7 @@ import { advanceWatchlistPullback } from "../watchlist-pullback/index.js";
 
 export type ExecuteDailyBriefingInput = {
   briefingType: "morning" | "evening";
+  date?: string;
   today: string;
   state: ShortTermStateStore;
   calendar: CalendarAdapter;
@@ -24,7 +25,7 @@ export type BriefingResolveResult = { ok: true; action: CalendarAction } | { ok:
 
 // 执行早报或晚报；日期由调用方注入，不从用户原文推断。
 export async function executeDailyBriefing(input: ExecuteDailyBriefingInput): Promise<BriefingResult> {
-  const targetDate = input.briefingType === "morning" ? input.today : addDays(input.today, 1);
+  const targetDate = input.date || (input.briefingType === "morning" ? input.today : addDays(input.today, 1));
   const listResult = await listEvents(input.calendar, { date: targetDate });
 
   if (!listResult.ok) return { ok: false, reply: `没有成功：${listResult.message}` };
@@ -44,7 +45,8 @@ export async function executeDailyBriefing(input: ExecuteDailyBriefingInput): Pr
   }
 
   const lines = listResult.data.map((event, index) => formatCalendarEventLine(event, index + 1, { fallbackDate: targetDate }));
-  const calendarSection = lines.length > 0 ? [input.briefingType === "morning" ? "今日日程：" : "明日日程：", ...lines].join("\n") : "";
+  const sectionTitle = input.date ? "日程：" : input.briefingType === "morning" ? "今日日程：" : "明日日程：";
+  const calendarSection = lines.length > 0 ? [sectionTitle, ...lines].join("\n") : "";
   return { ok: true, reply: [title, calendarSection, watchlistSection].filter(Boolean).join("\n") };
 }
 

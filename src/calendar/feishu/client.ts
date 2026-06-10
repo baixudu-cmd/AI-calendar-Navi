@@ -214,6 +214,7 @@ function normalizeEvent(value: unknown): FeishuCalendarEvent {
     end: readEventTime(event.end_time) || undefined,
     ...(isRecord(event.location) && readString(event.location.name) ? { location: readString(event.location.name) } : {}),
     ...(readString(event.description) ? { notes: readString(event.description) } : {}),
+    ...(readString(event.recurrence) ? { recurrence: readString(event.recurrence) } : {}),
   };
 }
 

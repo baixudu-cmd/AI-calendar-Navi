@@ -1,6 +1,6 @@
 // 飞书字段映射集中在这里，避免业务层直接拼飞书字段。
 
-import type { EventDraft } from "../../contract/index.js";
+import type { EventDraft, RecurrenceRuleDraft } from "../../contract/index.js";
 import type { FeishuCreatePayload, FeishuUpdatePayload, ListEventsInput } from "./types.js";
 
 const DEFAULT_TIMEZONE = "Asia/Shanghai";
@@ -18,8 +18,18 @@ export function mapCreateEventPayload(event: EventDraft, timezone = DEFAULT_TIME
     end_time: { timestamp: endTimestamp, timezone },
     ...(event.location ? { location: { name: event.location } } : {}),
     ...(event.notes ? { description: event.notes } : {}),
-    ...mapReminderMinutes(event.reminderMinutes, DEFAULT_CREATE_REMINDER_MINUTES),
+    ...(event.recurrence ? { recurrence: mapRecurrenceRule(event.recurrence) } : {}),
+    ...mapEventReminder(event, DEFAULT_CREATE_REMINDER_MINUTES),
   };
+}
+
+// 把内部重复规则转成飞书 recurrence RRULE；语义由模型决定，本地只做确定性格式映射。
+export function mapRecurrenceRule(rule: RecurrenceRuleDraft): string {
+  const interval = rule.interval ?? 1;
+  const parts = [`FREQ=${rule.frequency === "daily" ? "DAILY" : "WEEKLY"}`, `INTERVAL=${interval}`];
+  if (rule.frequency === "weekly") parts.push(`BYDAY=${rule.byWeekday.join(",")}`);
+  if (rule.count !== undefined) parts.push(`COUNT=${rule.count}`);
+  return parts.join(";");
 }
 
 // 把本地查询条件转成飞书查询参数。
@@ -49,8 +59,13 @@ export function mapUpdateEventPayload(patch: Partial<EventDraft>, timezone = DEF
     ...(patch.date && patch.endTime ? { end_time: { timestamp: toSecondTimestamp(patch.date, patch.endTime), timezone } } : {}),
     ...(patch.location ? { location: { name: patch.location } } : {}),
     ...(patch.notes ? { description: patch.notes } : {}),
-    ...mapReminderMinutes(patch.reminderMinutes),
+    ...mapEventReminder(patch),
   };
+}
+
+function mapEventReminder(event: Partial<EventDraft>, defaultMinute?: number): { reminders?: Array<{ minutes: number }> } {
+  if (event.reminderAtStart) return { reminders: [{ minutes: 0 }] };
+  return mapReminderMinutes(event.reminderMinutes, defaultMinute);
 }
 
 function mapReminderMinutes(value: number | number[] | undefined, defaultMinute?: number): { reminders?: Array<{ minutes: number }> } {

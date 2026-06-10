@@ -128,7 +128,8 @@ export function createImageDraftRequestOptions(): Record<string, unknown> {
         name: "image_calendar_draft",
         schema: {
           type: "object",
-          required: ["title", "date", "startTime"],
+          additionalProperties: false,
+          anyOf: [{ required: ["title", "date", "startTime"] }, { required: ["error"] }],
           properties: {
             title: { type: "string" },
             date: { type: "string" },
@@ -170,7 +171,7 @@ function buildImageDraftMessages(text: string): ImageDraftModelMessage[] {
       role: "system",
       content: [
         "你把用户主动发送的会议或日程截图 OCR 文本解析成日程字段。",
-        "只输出 JSON，不要解释。",
+        "只输出一个符合 image_calendar_draft schema 的结构化结果，不要解释、Markdown、代码块或多余文字。",
         "字段只允许 title、date、startTime、endTime、location、notes、reminderMinutes、error。",
         "date 必须是 YYYY-MM-DD，时间必须是 HH:mm。",
         "如果标题、日期或开始时间无法判断，输出 {\"error\":\"missing_required_fields\"}。",

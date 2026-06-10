@@ -303,4 +303,11 @@ describe("OpenClaw shadow caller", () => {
       expect(importLines.toLowerCase()).not.toContain(forbidden);
     }
   });
+
+  it("can bind the shadow route call to the configured local loopback interface", () => {
+    const content = readFileSync(join(process.cwd(), "src/openclaw/shadow-caller.ts"), "utf8");
+
+    expect(content).toContain("createLocalAddressFetch");
+    expect(content).toContain("OPENCLAW_SHADOW_LOCAL_ADDRESS");
+  });
 });

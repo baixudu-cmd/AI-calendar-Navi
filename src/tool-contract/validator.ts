@@ -3,6 +3,8 @@
 import type {
   EventDraft,
   EventQueryReference,
+  RecurrenceRuleDraft,
+  RecurrenceWeekday,
   ScheduleContextRef,
   SchedulePreferredWindow,
   SettingsSummaryTopic,
@@ -40,6 +42,7 @@ export type ToolTodoPatch = TodoPatch;
 
 export type CalendarToolCall =
   | { toolName: "calendar.create_event"; arguments: EventDraft }
+  | { toolName: "calendar.create_recurring_event"; arguments: EventDraft & { recurrence: RecurrenceRuleDraft } }
   | { toolName: "calendar.create_reminder"; arguments: EventDraft & { reminderAtStart: true } }
   | { toolName: "calendar.create_events"; arguments: { events: EventDraft[] } }
   | {
@@ -56,6 +59,10 @@ export type CalendarToolCall =
   | { toolName: "calendar.list_events"; arguments: { date?: string; range?: { startDate: string; endDate: string } } }
   | { toolName: "calendar.update_event"; arguments: { target: ToolTargetReference; patch: Partial<EventDraft> } }
   | {
+      toolName: "calendar.update_and_create_events";
+      arguments: { updates: Array<{ target: ToolTargetReference; patch: Partial<EventDraft> }>; events: EventDraft[] };
+    }
+  | {
       toolName: "calendar.propose_schedule";
       arguments: {
         date?: string;
@@ -68,7 +75,7 @@ export type CalendarToolCall =
       };
     }
   | { toolName: "calendar.confirm_schedule"; arguments: { confirmed: boolean; optionNumber?: number; itemChanges?: ToolScheduleItemChange[] } }
-  | { toolName: "assistant.remember_todo"; arguments: { title: string; autoSchedule?: boolean; date?: string } }
+  | { toolName: "assistant.remember_todo"; arguments: { title: string; autoSchedule?: boolean; date?: string; preferredWindow?: SchedulePreferredWindow } }
   | { toolName: "assistant.manage_todos"; arguments: { operation: "list"; limit?: number } }
   | { toolName: "assistant.manage_todos"; arguments: { operation: "list_shelved"; limit?: number } }
   | { toolName: "assistant.manage_todos"; arguments: { operation: "complete" | "delete" | "shelve" | "restore"; target: ToolTodoTarget } }
@@ -77,7 +84,7 @@ export type CalendarToolCall =
   | { toolName: "calendar.delete_events"; arguments: { query: ToolDeleteEventsQuery } }
   | { toolName: "calendar.confirm_delete"; arguments: { confirmed: boolean; itemNumbers?: number[] } }
   | { toolName: "calendar.confirm_create"; arguments: { confirmed: boolean } }
-  | { toolName: "calendar.daily_briefing"; arguments: { briefingType: "morning" | "evening" } }
+  | { toolName: "calendar.daily_briefing"; arguments: { briefingType: "morning" | "evening"; date?: string } }
   | { toolName: "assistant.settings_summary"; arguments: { topic?: SettingsSummaryTopic } }
   | { toolName: "assistant.status_overview"; arguments: Record<string, never> }
   | { toolName: "assistant.dismiss_context"; arguments: Record<string, never> }
@@ -121,6 +128,8 @@ export function validateToolCall(value: unknown, options: ToolValidationOptions 
   switch (value.toolName as CalendarToolName) {
     case "calendar.create_event":
       return validateCreateEvent(value.arguments, options);
+    case "calendar.create_recurring_event":
+      return validateCreateRecurringEvent(value.arguments, options);
     case "calendar.create_reminder":
       return validateCreateReminder(value.arguments, options);
     case "calendar.create_events":
@@ -131,6 +140,8 @@ export function validateToolCall(value: unknown, options: ToolValidationOptions 
       return validateListEvents(value.arguments);
     case "calendar.update_event":
       return validateUpdateEvent(value.arguments);
+    case "calendar.update_and_create_events":
+      return validateUpdateAndCreateEvents(value.arguments, options);
     case "calendar.propose_schedule":
       return validateProposeSchedule(value.arguments);
     case "calendar.confirm_schedule":
@@ -229,6 +240,23 @@ function validateCreateReminder(value: Record<string, unknown>, options: ToolVal
     call: {
       toolName: "calendar.create_reminder",
       arguments: { ...draftResult.event, reminderAtStart: true },
+    },
+  };
+}
+
+function validateCreateRecurringEvent(value: Record<string, unknown>, options: ToolValidationOptions): ToolValidationResult {
+  const draftResult = validateEventDraft(value, options);
+  if (!draftResult.ok) return draftResult;
+  if (!isRecord(value.recurrence)) return fail("missing_arguments", "重复日程需要 recurrence。");
+
+  const recurrence = normalizeRecurrenceRule(value.recurrence);
+  if (!recurrence) return fail("invalid_arguments", "recurrence 只支持合法的 daily 或 weekly 结构。");
+
+  return {
+    ok: true,
+    call: {
+      toolName: "calendar.create_recurring_event",
+      arguments: { ...draftResult.event, recurrence },
     },
   };
 }
@@ -358,6 +386,32 @@ function validateUpdateEvent(value: Record<string, unknown>): ToolValidationResu
   return { ok: true, call: { toolName: "calendar.update_event", arguments: { target, patch } } };
 }
 
+function validateUpdateAndCreateEvents(value: Record<string, unknown>, options: ToolValidationOptions): ToolValidationResult {
+  if (!Array.isArray(value.updates)) return fail("missing_arguments", "组合修改需要 updates。");
+  if (!Array.isArray(value.events)) return fail("missing_arguments", "组合修改需要 events。");
+  if (value.updates.length < 1 || value.updates.length > 5) return fail("invalid_arguments", "组合修改一次只支持 1 到 5 个修改。");
+  if (value.events.length < 1 || value.events.length > 5) return fail("invalid_arguments", "组合修改一次只支持 1 到 5 个新日程。");
+
+  const updates: Array<{ target: ToolTargetReference; patch: Partial<EventDraft> }> = [];
+  for (const update of value.updates) {
+    if (!isRecord(update)) return fail("invalid_arguments", "updates 里的每一项都必须是对象。");
+    const normalized = validateUpdateEvent(update);
+    if (!normalized.ok) return normalized;
+    if (normalized.call.toolName !== "calendar.update_event") return fail("invalid_arguments", "updates 只能包含修改动作。");
+    updates.push(normalized.call.arguments);
+  }
+
+  const events: EventDraft[] = [];
+  for (const event of value.events) {
+    if (!isRecord(event)) return fail("invalid_arguments", "events 里的每一项都必须是对象。");
+    const draftResult = validateEventDraft(event, options);
+    if (!draftResult.ok) return draftResult;
+    events.push(draftResult.event);
+  }
+
+  return { ok: true, call: { toolName: "calendar.update_and_create_events", arguments: { updates, events } } };
+}
+
 function validateProposeSchedule(value: Record<string, unknown>): ToolValidationResult {
   if (value.date !== undefined && (!isNonEmptyString(value.date) || !isValidDate(value.date))) return fail("invalid_arguments", "排程推荐需要合法 date。");
   if (value.preferredStartTime !== undefined && (!isNonEmptyString(value.preferredStartTime) || !isValidTime(value.preferredStartTime))) {
@@ -423,6 +477,9 @@ function validateRememberTodo(value: Record<string, unknown>): ToolValidationRes
   if (value.date !== undefined && (!isNonEmptyString(value.date) || !isValidDate(value.date))) {
     return fail("invalid_arguments", "待推进事项的 date 不合法。");
   }
+  if (value.preferredWindow !== undefined && !isSchedulePreferredWindow(value.preferredWindow)) {
+    return fail("invalid_arguments", "待推进事项的 preferredWindow 不合法。");
+  }
   return {
     ok: true,
     call: {
@@ -431,6 +488,7 @@ function validateRememberTodo(value: Record<string, unknown>): ToolValidationRes
         title: value.title.trim(),
         autoSchedule: typeof value.autoSchedule === "boolean" ? value.autoSchedule : true,
         ...(isNonEmptyString(value.date) ? { date: value.date } : {}),
+        ...(isSchedulePreferredWindow(value.preferredWindow) ? { preferredWindow: value.preferredWindow } : {}),
       },
     },
   };
@@ -522,8 +580,20 @@ function validateDailyBriefing(value: Record<string, unknown>): ToolValidationRe
   if (value.briefingType !== "morning" && value.briefingType !== "evening") {
     return fail("invalid_arguments", "briefingType 只能是 morning 或 evening。");
   }
+  if (value.date !== undefined && (!isNonEmptyString(value.date) || !isValidDate(value.date))) {
+    return fail("invalid_arguments", "日报需要合法 date。");
+  }
 
-  return { ok: true, call: { toolName: "calendar.daily_briefing", arguments: { briefingType: value.briefingType } } };
+  return {
+    ok: true,
+    call: {
+      toolName: "calendar.daily_briefing",
+      arguments: {
+        briefingType: value.briefingType,
+        ...(isNonEmptyString(value.date) ? { date: value.date } : {}),
+      },
+    },
+  };
 }
 
 function validateSettingsSummary(value: Record<string, unknown>): ToolValidationResult {
@@ -815,6 +885,34 @@ function normalizeReminderMinutes(value: unknown): number | number[] | undefined
   const positives = [...new Set(value.filter((item): item is number => Number.isInteger(item) && item > 0))].sort((a, b) => b - a).slice(0, 3);
   if (positives.length > 0) return positives;
   return value.some((item) => item === 0) ? 0 : undefined;
+}
+
+function normalizeRecurrenceRule(value: Record<string, unknown>): RecurrenceRuleDraft | null {
+  if ("rrule" in value) return null;
+  if (value.interval !== undefined && (!Number.isInteger(value.interval) || Number(value.interval) <= 0)) return null;
+  if (value.count !== undefined && (!Number.isInteger(value.count) || Number(value.count) <= 0)) return null;
+
+  const common = {
+    ...(Number.isInteger(value.interval) ? { interval: Number(value.interval) } : {}),
+    ...(Number.isInteger(value.count) ? { count: Number(value.count) } : {}),
+  };
+
+  if (value.frequency === "daily") {
+    if (value.byWeekday !== undefined) return null;
+    return { frequency: "daily", ...common };
+  }
+
+  if (value.frequency === "weekly") {
+    if (!Array.isArray(value.byWeekday) || value.byWeekday.length === 0) return null;
+    if (!value.byWeekday.every(isRecurrenceWeekday)) return null;
+    return { frequency: "weekly", ...common, byWeekday: [...new Set(value.byWeekday)] };
+  }
+
+  return null;
+}
+
+function isRecurrenceWeekday(value: unknown): value is RecurrenceWeekday {
+  return value === "MO" || value === "TU" || value === "WE" || value === "TH" || value === "FR" || value === "SA" || value === "SU";
 }
 
 function hasExecutablePatch(value: Partial<EventDraft>): boolean {

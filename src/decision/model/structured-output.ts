@@ -1,10 +1,13 @@
 // 结构化输出请求参数：给模型声明日历工具调用外形，实际业务校验仍在本地完成。
 
+import { TOOL_NAMES } from "../../tool-contract/index.js";
+
 const calendarToolCallSchema = {
   type: "object",
   required: ["toolName", "arguments"],
+  additionalProperties: false,
   properties: {
-    toolName: { type: "string" },
+    toolName: { type: "string", enum: TOOL_NAMES },
     arguments: { type: "object" },
   },
 };

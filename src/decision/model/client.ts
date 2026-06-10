@@ -21,7 +21,7 @@ export function createModelDecisionClient(options: ModelDecisionClientOptions): 
       let messages = buildModelDecisionMessages(request);
       let lastFailure: unknown = {
         action: "__malformed_model_output__",
-        error: "模型输出不是 JSON。",
+        error: "模型输出不是可解析的工具调用。",
       };
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -54,10 +54,10 @@ function parseToolCallContent(content: string, sourceText: string): ParsedToolCa
   } catch {
     return {
       ok: false,
-      message: "模型输出不是 JSON。",
+      message: "模型输出不是可解析的工具调用。",
       failure: {
         action: "__malformed_model_output__",
-        error: "模型输出不是 JSON。",
+        error: "模型输出不是可解析的工具调用。",
       },
     };
   }
@@ -75,7 +75,7 @@ function buildToolContractRetryMessages(messages: ModelMessage[], content: strin
       content: JSON.stringify({
         toolContractError: message,
         previousOutput: trimForRetry(content),
-        instruction: "上一轮输出没有通过工具合同。请重新输出一个合法的 {toolName, arguments} JSON；不要解释。",
+        instruction: "上一轮输出没有通过工具合同。请重新输出一个符合 calendar_tool_call schema 的 {toolName, arguments} 工具调用；不要解释。",
       }),
     },
   ];

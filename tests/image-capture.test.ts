@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeImageCalendarDraft, parseOcrCalendarDraftWithModel } from "../src/image-capture/index.js";
+import {
+  createImageDraftRequestOptions,
+  normalizeImageCalendarDraft,
+  parseOcrCalendarDraftWithModel,
+} from "../src/image-capture/index.js";
 
 describe("image capture event parser boundary", () => {
   it("accepts a complete calendar draft from image parser output", () => {
@@ -41,6 +45,15 @@ describe("image capture event parser boundary", () => {
         startTime: "上午10点",
       }),
     ).toMatchObject({ ok: false });
+  });
+
+  it("allows either a complete draft or a schema-bound error result from the image model", () => {
+    const options = createImageDraftRequestOptions();
+    const schema = (options.response_format as any).json_schema.schema;
+
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toBeUndefined();
+    expect(schema.anyOf).toEqual([{ required: ["title", "date", "startTime"] }, { required: ["error"] }]);
   });
 
   it("lets the model parse Tencent Meeting card OCR into event fields", async () => {
@@ -94,6 +107,28 @@ describe("image capture event parser boundary", () => {
       },
       sourceText: ocrText,
     });
+  });
+
+  it("asks the image model for schema-bound structured output", async () => {
+    let systemPrompt = "";
+    const result = await parseOcrCalendarDraftWithModel("2026年5月12日 10:00 至 10:45\n鑫达试验交流", {
+      model: "calendar-image-parser",
+      transport: async ({ messages }) => {
+        systemPrompt = messages[0]?.content || "";
+        return {
+          content: JSON.stringify({
+            title: "鑫达试验交流",
+            date: "2026-05-12",
+            startTime: "10:00",
+            endTime: "10:45",
+          }),
+        };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(systemPrompt).toContain("符合 image_calendar_draft schema");
+    expect(systemPrompt).not.toContain("只输出 JSON");
   });
 
   it("fails closed when the image text model returns unusable JSON", async () => {

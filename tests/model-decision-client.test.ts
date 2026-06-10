@@ -3,7 +3,7 @@ import { buildModelDecisionMessages, createModelDecisionClient } from "../src/de
 import { createShortTermStateStore } from "../src/state/index.js";
 
 describe("model decision client", () => {
-  it("builds a prompt with toolName, arguments, and JSON-only instruction", () => {
+  it("builds a prompt with toolName, arguments, and schema-bound instruction", () => {
     const messages = buildModelDecisionMessages({
       text: "明天下午三点见张总",
       state: createShortTermStateStore().snapshot(),
@@ -17,10 +17,12 @@ describe("model decision client", () => {
     expect(systemPrompt).toContain("toolName");
     expect(systemPrompt).toContain("arguments");
     expect(systemPrompt).toContain("calendar.create_event");
+    expect(systemPrompt).toContain("calendar.create_recurring_event");
     expect(systemPrompt).toContain("calendar.create_reminder");
     expect(systemPrompt).toContain("calendar.create_events");
     expect(systemPrompt).toContain("calendar.list_events");
     expect(systemPrompt).toContain("calendar.update_event");
+    expect(systemPrompt).toContain("calendar.update_and_create_events");
     expect(systemPrompt).toContain("calendar.propose_schedule");
     expect(systemPrompt).toContain("calendar.confirm_schedule");
     expect(systemPrompt).toContain("assistant.remember_todo");
@@ -31,8 +33,14 @@ describe("model decision client", () => {
     expect(systemPrompt).toContain("calendar.daily_briefing");
     expect(systemPrompt).toContain("assistant.dismiss_context");
     expect(systemPrompt).toContain("assistant.clarify");
-    expect(systemPrompt).toContain("只输出 JSON");
+    expect(systemPrompt).toContain("符合 calendar_tool_call schema");
+    expect(systemPrompt).not.toContain("只输出 JSON");
     expect(systemPrompt).toContain('"toolName":"calendar.create_event"');
+    expect(systemPrompt).toContain('"toolName":"calendar.create_recurring_event"');
+    expect(systemPrompt).toContain('"recurrence":{"frequency":"weekly","byWeekday":["MO"]}');
+    expect(systemPrompt).toContain("以后每天早上8点提醒我吃药");
+    expect(systemPrompt).toContain('"reminderAtStart":true');
+    expect(systemPrompt).toContain("不要输出 RRULE");
     expect(systemPrompt).toContain('"toolName":"calendar.create_reminder"');
     expect(systemPrompt).toContain('"toolName":"calendar.create_events"');
     expect(systemPrompt).toContain('"arguments"');
@@ -40,6 +48,8 @@ describe("model decision client", () => {
     expect(systemPrompt).toContain("今晚=今天晚上");
     expect(systemPrompt).toContain("重复出现同一个周几时，不能自动顺延成下一天");
     expect(systemPrompt).toContain("晚上帮我复盘明天安排");
+    expect(systemPrompt).toContain("明天工作台");
+    expect(systemPrompt).toContain('"toolName":"calendar.daily_briefing","arguments":{"briefingType":"morning","date":"2026-05-10"}');
     expect(systemPrompt).toContain('"toolName":"calendar.confirm_delete"');
     expect(systemPrompt).toContain('"toolName":"calendar.confirm_create"');
     expect(systemPrompt).toContain('"toolName":"calendar.propose_schedule"');
@@ -62,6 +72,8 @@ describe("model decision client", () => {
     expect(systemPrompt).toContain("先不删");
     expect(systemPrompt).toContain("日报条目删除示例");
     expect(systemPrompt).toContain('"target":{"kind":"briefing_item","itemNumber":1}');
+    expect(systemPrompt).toContain('"toolName":"calendar.update_and_create_events"');
+    expect(systemPrompt).toContain("先修改已有日程，再创建新日程");
     expect(userPrompt).toContain('"currentDate":"2026-05-09"');
     expect(userPrompt).toContain('"timezone":"Asia/Shanghai"');
   });
@@ -318,7 +330,7 @@ describe("model decision client", () => {
     })).resolves.toEqual({ type: "dismiss_context" });
   });
 
-  it("returns malformed shape when content is not JSON", async () => {
+  it("returns malformed shape when content is not a parseable tool call", async () => {
     const client = createModelDecisionClient({
       model: "fake-model",
       transport: async () => ({ content: "不是 JSON" }),
@@ -331,7 +343,7 @@ describe("model decision client", () => {
 
     expect(result).toEqual({
       action: "__malformed_model_output__",
-      error: "模型输出不是 JSON。",
+      error: "模型输出不是可解析的工具调用。",
     });
   });
 });

@@ -1,6 +1,6 @@
 // 短期状态模块，只保存白名单上下文，避免发展成长期记忆。
 
-import type { EventDraft } from "../contract/index.js";
+import type { CalendarAction, EventDraft, RecurrenceRuleDraft, RecurrenceWeekday } from "../contract/index.js";
 import type { SeedLiteItem } from "../seed-lite/index.js";
 
 export type LastEventState = {
@@ -59,7 +59,10 @@ export type PendingBatchDeleteState = {
 export type PendingDeleteState = PendingSingleDeleteState | PendingBatchDeleteState;
 
 export type PendingConflictState = {
-  action: { type: "create_event"; event: EventDraft } | { type: "create_events"; events: EventDraft[] };
+  action:
+    | Extract<CalendarAction, { type: "create_event" }>
+    | Extract<CalendarAction, { type: "create_recurring_event" }>
+    | Extract<CalendarAction, { type: "create_events" }>;
   conflicts: PendingConflictItemState[];
 };
 
@@ -392,6 +395,10 @@ function normalizePendingConflictAction(
     const event = normalizeRequiredEventDraft(value.event);
     return event ? { type: "create_event", event } : null;
   }
+  if (value.type === "create_recurring_event") {
+    const event = normalizeRequiredRecurringEventDraft(value.event);
+    return event ? { type: "create_recurring_event", event } : null;
+  }
   if (value.type === "create_events" && Array.isArray(value.events)) {
     const events = value.events.map(normalizeRequiredEventDraft);
     if (events.length === 0 || events.some((event) => !event)) return null;
@@ -416,6 +423,39 @@ function normalizeRequiredEventDraft(value: unknown): EventDraft | null {
       : {}),
     ...(isNonEmptyString(value.notes) ? { notes: value.notes } : {}),
   };
+}
+
+function normalizeRequiredRecurringEventDraft(value: unknown): (EventDraft & { recurrence: RecurrenceRuleDraft }) | null {
+  if (!isRecord(value)) return null;
+  const event = normalizeRequiredEventDraft(value);
+  if (!event || !isRecord(value.recurrence)) return null;
+  const recurrence = normalizeRecurrenceRule(value.recurrence);
+  return recurrence ? { ...event, recurrence } : null;
+}
+
+function normalizeRecurrenceRule(value: Record<string, unknown>): RecurrenceRuleDraft | null {
+  if ("rrule" in value) return null;
+  if (value.interval !== undefined && (!Number.isInteger(value.interval) || Number(value.interval) <= 0)) return null;
+  if (value.count !== undefined && (!Number.isInteger(value.count) || Number(value.count) <= 0)) return null;
+
+  const common = {
+    ...(Number.isInteger(value.interval) ? { interval: Number(value.interval) } : {}),
+    ...(Number.isInteger(value.count) ? { count: Number(value.count) } : {}),
+  };
+  if (value.frequency === "daily") {
+    if ("byWeekday" in value) return null;
+    return { frequency: "daily", ...common };
+  }
+  if (value.frequency === "weekly") {
+    if (!Array.isArray(value.byWeekday) || value.byWeekday.length === 0) return null;
+    if (!value.byWeekday.every(isRecurrenceWeekday)) return null;
+    return { frequency: "weekly", ...common, byWeekday: [...new Set(value.byWeekday)] };
+  }
+  return null;
+}
+
+function isRecurrenceWeekday(value: unknown): value is RecurrenceWeekday {
+  return value === "MO" || value === "TU" || value === "WE" || value === "TH" || value === "FR" || value === "SA" || value === "SU";
 }
 
 function normalizePendingConflictItem(value: unknown): PendingConflictItemState | null {

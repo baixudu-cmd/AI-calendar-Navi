@@ -2,11 +2,13 @@
 
 export const TOOL_NAMES = [
   "calendar.create_event",
+  "calendar.create_recurring_event",
   "calendar.create_reminder",
   "calendar.create_events",
   "calendar.create_and_propose_schedule",
   "calendar.list_events",
   "calendar.update_event",
+  "calendar.update_and_create_events",
   "calendar.propose_schedule",
   "calendar.confirm_schedule",
   "assistant.remember_todo",
@@ -53,6 +55,36 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
         endTime: { type: "string", format: "time" },
         location: { type: "string" },
         reminderMinutes: { anyOf: [{ type: "number" }, { type: "array", items: { type: "number" }, maxItems: 3 }] },
+        sourceIds: { type: "array", items: { type: "string" } },
+        notes: { type: "string" },
+      },
+    },
+  },
+  "calendar.create_recurring_event": {
+    toolName: "calendar.create_recurring_event",
+    description: "创建一个明确日期和开始时间的重复日程；只接受结构化 recurrence，不接受 RRULE 字符串。",
+    parameters: {
+      type: "object",
+      required: ["title", "date", "startTime", "recurrence"],
+      properties: {
+        title: { type: "string" },
+        date: { type: "string", format: "date" },
+        startTime: { type: "string", format: "time" },
+        startTimeEvidence: { type: "string" },
+        endTime: { type: "string", format: "time" },
+        location: { type: "string" },
+        recurrence: {
+          type: "object",
+          required: ["frequency"],
+          properties: {
+            frequency: { type: "string", enum: ["daily", "weekly"] },
+            interval: { type: "number", minimum: 1 },
+            byWeekday: { type: "array", items: { type: "string", enum: ["MO", "TU", "WE", "TH", "FR", "SA", "SU"] } },
+            count: { type: "number", minimum: 1 },
+          },
+        },
+        reminderMinutes: { anyOf: [{ type: "number" }, { type: "array", items: { type: "number" }, maxItems: 3 }] },
+        reminderAtStart: { type: "boolean" },
         sourceIds: { type: "array", items: { type: "string" } },
         notes: { type: "string" },
       },
@@ -198,6 +230,48 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
       },
     },
   },
+  "calendar.update_and_create_events": {
+    toolName: "calendar.update_and_create_events",
+    description: "同一条消息里既要修改已有日程、又要创建明确时间的新日程时使用；执行顺序是先修改，再创建。",
+    parameters: {
+      type: "object",
+      required: ["updates", "events"],
+      properties: {
+        updates: {
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            type: "object",
+            required: ["target", "patch"],
+            properties: {
+              target: { type: "object" },
+              patch: { type: "object" },
+            },
+          },
+        },
+        events: {
+          type: "array",
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            type: "object",
+            required: ["title", "date", "startTime"],
+            properties: {
+              title: { type: "string" },
+              date: { type: "string", format: "date" },
+              startTime: { type: "string", format: "time" },
+              startTimeEvidence: { type: "string" },
+              endTime: { type: "string", format: "time" },
+              location: { type: "string" },
+              reminderMinutes: { anyOf: [{ type: "number" }, { type: "array", items: { type: "number" }, maxItems: 3 }] },
+              notes: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+  },
   "calendar.propose_schedule": {
     toolName: "calendar.propose_schedule",
     description: "为一个或多个待安排事项推荐当天空档；items 可用 title 或 target 引用待推进收件箱；已有推荐时可省略 items 重新推荐；autoCreate 为 true 时自动写入第一个推荐位。",
@@ -257,7 +331,7 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
   },
   "assistant.remember_todo": {
     toolName: "assistant.remember_todo",
-    description: "记录一个没有明确开始时间的待推进事项；autoSchedule 为 true 时系统会按排程记忆自动写入日历。",
+    description: "记录一个没有明确开始时间的待推进事项；autoSchedule 为 true 时系统会按日期和粗时段自动写入日历。",
     parameters: {
       type: "object",
       required: ["title"],
@@ -265,6 +339,7 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
         title: { type: "string" },
         autoSchedule: { type: "boolean" },
         date: { type: "string", format: "date" },
+        preferredWindow: { type: "string", enum: ["morning", "afternoon", "evening", "later"] },
       },
     },
   },
@@ -368,6 +443,7 @@ export const TOOL_SCHEMAS: Record<CalendarToolName, ToolSchema> = {
       required: ["briefingType"],
       properties: {
         briefingType: { enum: ["morning", "evening"] },
+        date: { type: "string", format: "date" },
       },
     },
   },

@@ -75,11 +75,13 @@ export function createClarifyRepairRequestOptions(): Record<string, unknown> {
         schema: {
           type: "object",
           required: ["status"],
+          additionalProperties: false,
           properties: {
             status: { type: "string", enum: ["complete", "missing_time"] },
             event: {
               type: "object",
               required: ["title", "date", "startTime"],
+              additionalProperties: false,
               properties: {
                 title: { type: "string" },
                 date: { type: "string" },
@@ -100,6 +102,7 @@ export function createClarifyRepairRequestOptions(): Record<string, unknown> {
             draft: {
               type: "object",
               required: ["title"],
+              additionalProperties: false,
               properties: {
                 title: { type: "string" },
                 date: { type: "string" },
@@ -134,8 +137,8 @@ function buildClarifyRepairMessages(input: ClarifyEventDraftRepairInput): Clarif
         "如果用户说“今天3点”这类中文裸小时，结合 now 选择今天接下来最自然的时间；例如当前已过上午 3 点时，今天3点应理解为 15:00。",
         "date 必须是 YYYY-MM-DD，时间必须是 HH:mm。今天、明天等相对日期按 currentDate 和 timezone 转换。",
         "只有缺日期或开始时间时，才输出 status=missing_time、missing、一个最短追问，以及已经能确定的 draft；missing 只能包含 date 或 startTime，draft 必须包含你从原文总结的 title。",
-        "输出格式：完整日程为 {\"status\":\"complete\",\"event\":{\"title\":\"...\",\"date\":\"YYYY-MM-DD\",\"startTime\":\"HH:mm\"}}；缺时间为 {\"status\":\"missing_time\",\"missing\":[\"startTime\"],\"question\":\"这个日程几点开始？\",\"draft\":{\"title\":\"...\",\"date\":\"YYYY-MM-DD\"}}。",
-        "只输出 JSON，不要解释。",
+        "输出外形：完整日程为 {\"status\":\"complete\",\"event\":{\"title\":\"...\",\"date\":\"YYYY-MM-DD\",\"startTime\":\"HH:mm\"}}；缺时间为 {\"status\":\"missing_time\",\"missing\":[\"startTime\"],\"question\":\"这个日程几点开始？\",\"draft\":{\"title\":\"...\",\"date\":\"YYYY-MM-DD\"}}。",
+        "只输出一个符合 clarify_event_draft_repair schema 的结构化结果，不要解释、Markdown、代码块或多余文字。",
       ].join("\n"),
     },
     {

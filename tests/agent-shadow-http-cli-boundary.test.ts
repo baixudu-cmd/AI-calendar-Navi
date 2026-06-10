@@ -13,6 +13,11 @@ describe("shadow HTTP CLI boundary", () => {
     expect(content).toContain("createCalendarToolCallRequestOptions");
     expect(content).toContain("requestOptions: createCalendarToolCallRequestOptions()");
     expect(content).toContain("createLiveFeishuCalendarAdapter");
+    expect(content).toContain("createLocalAddressFetch");
+    expect(content).toContain("process.env.NAVI_OUTBOUND_LOCAL_ADDRESS");
+    expect(content).toContain("process.env.NAVI_FEISHU_RESOLVE_IP");
+    expect(content).toContain("process.env.NAVI_MODEL_RESOLVE_IP");
+    expect(content).toContain("fetch: modelFetch");
     expect(content).toContain("resolveShadowCalendarTarget");
     expect(content).toContain("createControlledShadowRoute");
     expect(content).toContain("createShortTermStateStore");

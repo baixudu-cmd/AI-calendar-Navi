@@ -8,7 +8,7 @@ import { normalizeExplicitWeekdayCreateDates } from "../calendar/weekday-guard.j
 import type { ClarifyEventDraftRepairer } from "../clarify-repair/index.js";
 import { deleteEvent, deleteManyEvents } from "../calendar-api/index.js";
 import type { EnvSource } from "../config/index.js";
-import type { CalendarAction, EventQuery, EventQueryReference } from "../contract/index.js";
+import type { CalendarAction, EventQuery, EventQueryReference, SchedulePreferredWindow } from "../contract/index.js";
 import type { DecisionClient } from "../decision/index.js";
 import { protectIncomingMessage } from "../entry/index.js";
 import type { ImageDraftParser, ImageCalendarDraftParseResult } from "../image-capture/index.js";
@@ -144,6 +144,7 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
         title: seed.title,
         sourceIds: [seed.seedId],
         date: loopResult.action.date,
+        preferredWindow: loopResult.action.preferredWindow,
         input,
         requestId,
         sourceText: protectedInput.message.text,
@@ -263,6 +264,15 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
     });
   }
 
+  if (loopResult.action.type === "update_and_create_events") {
+    return executeUpdateAndCreateEvents({
+      action: loopResult.action,
+      input,
+      requestId,
+      sourceText: protectedInput.message.text,
+    });
+  }
+
   if (loopResult.action.type === "propose_schedule") {
     const scheduleAction = await resolveScheduleTodoTargets(loopResult.action, input.seedStore, input.state);
     if (!scheduleAction.ok) {
@@ -307,6 +317,7 @@ async function handleCalendarAgentRequestCore(input: CalendarAgentRequest, reque
   if (loopResult.action.type === "daily_briefing") {
     const briefing = await executeDailyBriefing({
       briefingType: loopResult.action.briefingType,
+      date: loopResult.action.date,
       today: input.today || todayInShanghai(),
       state: input.state,
       calendar: input.calendar,
@@ -422,6 +433,46 @@ async function executeCreateAndProposeSchedule(input: {
   };
 }
 
+async function executeUpdateAndCreateEvents(input: {
+  action: Extract<CalendarAction, { type: "update_and_create_events" }>;
+  input: CalendarAgentRequest;
+  requestId: string;
+  sourceText: string;
+}): Promise<CalendarAgentResponse> {
+  const replies: string[] = [];
+
+  for (const update of input.action.updates) {
+    const updated = await executeCalendarAgentAction({
+      action: { type: "update_event", target: update.target, patch: update.patch },
+      input: input.input,
+      requestId: input.requestId,
+      sourceText: input.sourceText,
+    });
+    if (!updated.ok) return { ...updated, actionType: "update_and_create_events" };
+    replies.push(updated.reply);
+  }
+
+  const createAction: CalendarAction =
+    input.action.events.length === 1
+      ? { type: "create_event", event: input.action.events[0] }
+      : { type: "create_events", events: input.action.events };
+  const created = await executeCalendarAgentAction({
+    action: createAction,
+    input: input.input,
+    requestId: input.requestId,
+    sourceText: input.sourceText,
+  });
+  if (!created.ok) return { ...created, reply: [...replies, created.reply].join("\n\n"), actionType: "update_and_create_events" };
+
+  return {
+    ok: true,
+    reply: [...replies, created.reply].join("\n\n"),
+    actionType: "update_and_create_events",
+    requestId: input.requestId,
+    ...(created.createdEvents ? { createdEvents: created.createdEvents } : {}),
+  };
+}
+
 async function repairClarifyEventDraft(input: {
   action: Extract<CalendarAction, { type: "clarify" }>;
   sourceText: string;
@@ -479,12 +530,18 @@ async function executeAutoScheduleTodo(input: {
   title: string;
   sourceIds: string[];
   date: string | undefined;
+  preferredWindow: SchedulePreferredWindow | undefined;
   input: CalendarAgentRequest;
   requestId: string;
   sourceText: string;
 }): Promise<CalendarAgentResponse> {
   const proposal = await executeScheduleProposal({
-    action: { type: "propose_schedule", date: input.date, items: [{ title: input.title, sourceIds: input.sourceIds }] },
+    action: {
+      type: "propose_schedule",
+      date: input.date,
+      items: [{ title: input.title, sourceIds: input.sourceIds }],
+      ...(input.preferredWindow ? { preferredWindow: input.preferredWindow } : {}),
+    },
     calendar: input.input.calendar,
     state: input.input.state,
     memoryDreamStore: input.input.memoryDreamStore,
@@ -874,7 +931,7 @@ function eventMatchesStructuredQuery(event: FeishuCalendarEvent, target: EventQu
   if (target.range && (!parsed.date || parsed.date < target.range.startDate || parsed.date > target.range.endDate)) return false;
   if (target.startTime && parsed.startTime !== target.startTime) return false;
   if (target.timeWindow && !timeBelongsToWindow(parsed.startTime, target.timeWindow)) return false;
-  if (target.title && !normalizeMatchText(event.title).includes(normalizeMatchText(target.title))) return false;
+  if (target.title && !eventTitleMatchesStructuredTarget(event.title, target.title, Boolean(target.date || target.range), Boolean(target.startTime || target.timeWindow))) return false;
   return true;
 }
 
@@ -891,6 +948,30 @@ function normalizeMatchText(value: string): string {
   return Array.from(value.normalize("NFKC").toLowerCase())
     .filter((char) => char.trim().length > 0)
     .join("");
+}
+
+function eventTitleMatchesStructuredTarget(eventTitle: string, targetTitle: string, hasDateScope: boolean, hasTimeScope: boolean): boolean {
+  const eventText = normalizeMatchText(eventTitle);
+  const targetText = normalizeMatchText(targetTitle);
+  if (!targetText) return true;
+  if (eventText.includes(targetText)) return true;
+  if (!hasDateScope || !hasTimeScope) return false;
+
+  const commonLength = longestCommonSubsequenceLength(eventText, targetText);
+  return commonLength >= 2 && commonLength / targetText.length >= 0.5;
+}
+
+function longestCommonSubsequenceLength(left: string, right: string): number {
+  const previous = Array(right.length + 1).fill(0);
+  const current = Array(right.length + 1).fill(0);
+  for (const leftChar of left) {
+    for (let index = 0; index < right.length; index += 1) {
+      current[index + 1] = leftChar === right[index] ? previous[index] + 1 : Math.max(previous[index + 1], current[index]);
+    }
+    previous.splice(0, previous.length, ...current);
+    current.fill(0);
+  }
+  return previous[right.length];
 }
 
 async function executeDeleteConfirmation(
@@ -1077,8 +1158,8 @@ function formatRequestedCreateItems(action: CalendarAction): string {
   return `本次请求还包括这些尚未写入的日程：\n${lines.join("\n")}`;
 }
 
-function isCreateAction(action: CalendarAction): action is Extract<CalendarAction, { type: "create_event" | "create_events" }> {
-  return action.type === "create_event" || action.type === "create_events";
+function isCreateAction(action: CalendarAction): action is Extract<CalendarAction, { type: "create_event" | "create_recurring_event" | "create_events" }> {
+  return action.type === "create_event" || action.type === "create_recurring_event" || action.type === "create_events";
 }
 
 function createdEventsFromCalendarData(data: FeishuCalendarEvent | FeishuCalendarEvent[]): MemoryDreamCreatedEvent[] {
@@ -1101,7 +1182,7 @@ function isSeedLiteCandidate(action: CalendarAction): action is Extract<Calendar
 }
 
 function isCreatedActionType(actionType: string): boolean {
-  return actionType === "create_event" || actionType === "create_events";
+  return actionType === "create_event" || actionType === "create_recurring_event" || actionType === "create_events";
 }
 
 function shouldUseAutoScheduleStartTime(action: Extract<CalendarAction, { type: "propose_schedule" }>): boolean {
@@ -1171,7 +1252,7 @@ function updateState(state: ShortTermStateStore, action: CalendarAction, data: F
     });
     return;
   }
-  if (action.type !== "create_event" && action.type !== "update_event") return;
+  if (action.type !== "create_event" && action.type !== "create_recurring_event" && action.type !== "update_event") return;
   state.update({ last_event: lastEventStateFromCalendarEvent(data) });
 }
 
@@ -1236,6 +1317,7 @@ async function registerWechatReminders(input: {
   defaultLeads: number[];
 }) {
   if (!input.store) return;
+  if (input.action.type === "create_recurring_event") return;
   if (input.action.type === "create_event" && !Array.isArray(input.data)) {
     await input.store.addMany(
       buildWechatReminderJobs(
@@ -1299,7 +1381,7 @@ function resolveUpdatedReminderLeadSource(
 }
 
 async function completeCreatedSeedSources(action: CalendarAction, seedStore: SeedLiteStore | undefined, state: ShortTermStateStore) {
-  if (action.type === "create_event") {
+  if (action.type === "create_event" || action.type === "create_recurring_event") {
     await completeSeedLiteSources(action.event.sourceIds || [], seedStore, state);
   } else if (action.type === "create_events") {
     await completeSeedLiteSources(action.events.flatMap((event) => event.sourceIds || []), seedStore, state);
@@ -1310,16 +1392,22 @@ function validateStateBackedReminderEvidence(action: CalendarAction, state: Shor
   const events =
     action.type === "create_event"
       ? [action.event]
-      : action.type === "create_events"
-        ? action.events
-        : [];
+      : action.type === "create_recurring_event"
+        ? [action.event]
+        : action.type === "create_events"
+          ? action.events
+          : [];
   if (events.length === 0) return { ok: true };
   const seedItems = state.snapshot().seed_items || [];
 
   for (const event of events) {
     if (!event.reminderAtStart || !event.sourceIds || event.sourceIds.length === 0) continue;
     const source = seedItems.find((item) => event.sourceIds?.includes(item.seedId));
-    if (!source?.reminderAt) {
+    if (!source) {
+      return { ok: false, message: "没有找到对应的待推进提醒，先保留在收件箱里。" };
+    }
+    if (action.type === "create_recurring_event") continue;
+    if (!source.reminderAt) {
       return { ok: false, message: "没有找到对应的待推进提醒，先保留在收件箱里。" };
     }
     const [date, startTime] = source.reminderAt.trim().split(" ");

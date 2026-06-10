@@ -61,11 +61,12 @@ export function formatSelfUseRuntimeDoctorReport(result: SelfUseRuntimeDoctorRes
 }
 
 // 用错误 secret 探测 shadow route 是否可达；正常结果应在鉴权前失败，不触发模型或飞书。
-export async function probeShadowRoute(input: { url: string; timeoutMs?: number }): Promise<ShadowRouteProbeResult> {
+export async function probeShadowRoute(input: { url: string; timeoutMs?: number; fetch?: typeof globalThis.fetch }): Promise<ShadowRouteProbeResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs || 3_000);
+  const fetchImpl = input.fetch || globalThis.fetch;
   try {
-    const response = await fetch(input.url, {
+    const response = await fetchImpl(input.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

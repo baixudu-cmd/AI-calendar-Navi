@@ -312,6 +312,7 @@ function sideEffectsForTool(toolName: CalendarToolName): string[] {
   if (toolName === "calendar.confirm_create") return ["确认后可写日历"];
   if (toolName === "assistant.clarify") return ["可写 pending_clarification"];
   if (toolName === "calendar.update_event") return ["可写日历", "可刷新对应未发送微信提醒"];
+  if (toolName === "calendar.create_recurring_event") return ["可写日历", "使用飞书原生 recurrence", "不展开微信提醒队列"];
   return ["可写日历", "可登记微信提醒"];
 }
 

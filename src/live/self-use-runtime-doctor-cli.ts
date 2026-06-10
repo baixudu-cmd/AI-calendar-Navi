@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { createLocalAddressFetch } from "../net/local-address-fetch.js";
 import { createFileWechatReminderStore, inspectWechatReminderStatus } from "../wechat-reminder/index.js";
 import { runProactiveRuntimeDoctor } from "./proactive-runtime-doctor.js";
 import {
@@ -82,7 +83,10 @@ async function loadShadowProbe(): Promise<ShadowRouteProbeResult> {
   if (shadowProbeFile) return readShadowProbeFile(shadowProbeFile);
   const shadowUrl = process.env.SELF_USE_RUNTIME_SHADOW_URL || readLiveShadowUrl();
   if (!shadowUrl) return { ok: false, message: "缺少 SELF_USE_RUNTIME_SHADOW_URL 或 SELF_USE_RUNTIME_ENABLE_LIVE=1" };
-  return probeShadowRoute({ url: shadowUrl });
+  return probeShadowRoute({
+    url: shadowUrl,
+    fetch: createLocalAddressFetch(process.env.OPENCLAW_SHADOW_LOCAL_ADDRESS),
+  });
 }
 
 async function readShadowProbeFile(filePath: string): Promise<ShadowRouteProbeResult> {

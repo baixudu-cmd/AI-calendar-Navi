@@ -51,6 +51,60 @@ describe("Feishu calendar mapper", () => {
     });
   });
 
+  it("maps daily recurrence into Feishu RRULE", () => {
+    expect(
+      mapCreateEventPayload({
+        title: "站会",
+        date: "2026-06-01",
+        startTime: "09:00",
+        recurrence: { frequency: "daily", interval: 1 },
+      }),
+    ).toMatchObject({
+      recurrence: "FREQ=DAILY;INTERVAL=1",
+    });
+  });
+
+  it("maps recurring at-start reminders into Feishu zero-minute reminders", () => {
+    expect(
+      mapCreateEventPayload({
+        title: "吃药",
+        date: "2026-06-11",
+        startTime: "08:00",
+        reminderAtStart: true,
+        recurrence: { frequency: "daily", interval: 1 },
+      }),
+    ).toMatchObject({
+      recurrence: "FREQ=DAILY;INTERVAL=1",
+      reminders: [{ minutes: 0 }],
+    });
+  });
+
+  it("maps weekly recurrence weekdays into Feishu RRULE", () => {
+    expect(
+      mapCreateEventPayload({
+        title: "例会",
+        date: "2026-06-01",
+        startTime: "10:00",
+        recurrence: { frequency: "weekly", interval: 1, byWeekday: ["MO", "WE", "FR"] },
+      }),
+    ).toMatchObject({
+      recurrence: "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE,FR",
+    });
+  });
+
+  it("maps recurring event count into Feishu RRULE", () => {
+    expect(
+      mapCreateEventPayload({
+        title: "训练",
+        date: "2026-06-01",
+        startTime: "19:00",
+        recurrence: { frequency: "daily", interval: 1, count: 10 },
+      }),
+    ).toMatchObject({
+      recurrence: "FREQ=DAILY;INTERVAL=1;COUNT=10",
+    });
+  });
+
   it("clears Feishu reminders when a created event explicitly disables reminders", () => {
     expect(
       mapCreateEventPayload({
@@ -95,6 +149,12 @@ describe("Feishu calendar mapper", () => {
   it("clears Feishu reminders when update patch disables reminders", () => {
     expect(mapUpdateEventPayload({ reminderMinutes: 0 })).toEqual({
       reminders: [],
+    });
+  });
+
+  it("maps update at-start reminders into Feishu zero-minute reminders", () => {
+    expect(mapUpdateEventPayload({ reminderAtStart: true })).toEqual({
+      reminders: [{ minutes: 0 }],
     });
   });
 

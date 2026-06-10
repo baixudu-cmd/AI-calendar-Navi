@@ -44,6 +44,55 @@ describe("Feishu calendar client", () => {
     });
   });
 
+  it("sends recurrence when creating recurring events", async () => {
+    const requests: FeishuTransportRequest[] = [];
+    const client = createFeishuCalendarClient({
+      config: { appId: "app", appSecret: "secret", calendarId: "primary", timezone: "Asia/Shanghai" },
+      tenantAccessToken: "token",
+      transport: {
+        request: async (request) => {
+          requests.push(request);
+          return {
+            status: 200,
+            body: {
+              code: 0,
+              data: {
+                event: {
+                  event_id: "evt_recurring",
+                  summary: "站会",
+                  start_time: { timestamp: "1780275600", timezone: "Asia/Shanghai" },
+                  end_time: { timestamp: "1780279200", timezone: "Asia/Shanghai" },
+                  recurrence: "FREQ=DAILY;INTERVAL=1",
+                },
+              },
+            },
+          };
+        },
+      },
+    });
+
+    const result = await client.createEvent({
+      title: "站会",
+      date: "2026-06-01",
+      startTime: "09:00",
+      recurrence: { frequency: "daily", interval: 1 },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        id: "evt_recurring",
+        title: "站会",
+        start: "2026-06-01 09:00",
+        end: "2026-06-01 10:00",
+        recurrence: "FREQ=DAILY;INTERVAL=1",
+      },
+    });
+    expect(requests[0]?.body).toMatchObject({
+      recurrence: "FREQ=DAILY;INTERVAL=1",
+    });
+  });
+
   it("adds the configured personal attendee after creating an event", async () => {
     const requests: FeishuTransportRequest[] = [];
     const client = createFeishuCalendarClient({

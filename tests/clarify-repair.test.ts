@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createClarifyEventDraftRepairer,
   createClarifyRepairRequestOptions,
   normalizeClarifyRepairResponse,
 } from "../src/clarify-repair/index.js";
@@ -32,10 +33,41 @@ describe("clarify repair", () => {
     const schema = (options.response_format as any).json_schema.schema;
     const missingItems = schema.properties.missing.items;
 
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties.event.additionalProperties).toBe(false);
+    expect(schema.properties.draft.additionalProperties).toBe(false);
     expect(missingItems.enum).toEqual(["date", "startTime"]);
     expect(schema.properties.draft.required).toEqual(["title"]);
     expect(JSON.stringify(schema)).not.toContain("error");
     expect(JSON.stringify(schema)).not.toContain("eventType");
+  });
+
+  it("asks the repair model for schema-bound structured output", async () => {
+    let systemPrompt = "";
+    const repairer = createClarifyEventDraftRepairer({
+      model: "repair-model",
+      transport: async ({ messages }) => {
+        systemPrompt = messages[0]?.content || "";
+        return {
+          content: JSON.stringify({
+            status: "missing_time",
+            missing: ["startTime"],
+            question: "这个日程几点开始？",
+            draft: { title: "约张总开会", date: "2026-05-15" },
+          }),
+        };
+      },
+    });
+
+    await repairer({
+      sourceText: "明天约张总开会",
+      clarify: { type: "clarify", question: "是什么会议？", missing: ["title"] },
+      now: "2026-05-14T10:00:00+08:00",
+      timezone: "Asia/Shanghai",
+    });
+
+    expect(systemPrompt).toContain("符合 clarify_event_draft_repair schema");
+    expect(systemPrompt).not.toContain("只输出 JSON");
   });
 
   it("keeps necessary clarification only when date or start time is missing", () => {

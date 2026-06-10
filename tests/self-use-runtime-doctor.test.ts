@@ -1,6 +1,6 @@
 // P14 自用运行体检测试：聚合主动链路、微信入口和提醒队列状态，只读不发送。
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -114,5 +114,12 @@ describe("self-use runtime doctor", () => {
     expect(result.stdout).toContain("Self-use runtime doctor: passed");
     expect(result.stdout).toContain("微信入口 shadow server 可达。");
     expect(result.stdout + result.stderr).not.toContain("FEISHU_APP_SECRET");
+  });
+
+  it("lets the live CLI bind the shadow probe to the configured local loopback interface", () => {
+    const content = readFileSync(join(process.cwd(), "src/live/self-use-runtime-doctor-cli.ts"), "utf8");
+
+    expect(content).toContain("createLocalAddressFetch");
+    expect(content).toContain("OPENCLAW_SHADOW_LOCAL_ADDRESS");
   });
 });

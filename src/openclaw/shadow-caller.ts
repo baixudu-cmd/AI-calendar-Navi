@@ -1,5 +1,7 @@
 // OpenClaw shadow caller：只负责把最小消息载荷 POST 到本机 shadow route，不承载日历业务逻辑。
 
+import { createLocalAddressFetch } from "../net/local-address-fetch.js";
+
 export type OpenClawShadowPayload = {
   text: string;
   messageId: string;
@@ -51,7 +53,8 @@ export function buildOpenClawShadowPayload(input: BuildOpenClawShadowPayloadInpu
 
 // 调用受控 shadow HTTP route；任何非成功响应都按失败关闭处理。
 export async function callOpenClawShadowRoute(input: CallOpenClawShadowRouteInput): Promise<CalendarAgentResponse> {
-  const response = await fetch(input.url, {
+  const fetchImpl = createLocalAddressFetch(process.env.OPENCLAW_SHADOW_LOCAL_ADDRESS);
+  const response = await fetchImpl(input.url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(buildOpenClawShadowPayload(input)),

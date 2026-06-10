@@ -149,4 +149,32 @@ describe("Feishu live calendar adapter", () => {
 
     expect(authorizations).toEqual(["Bearer tenant-token-2", "Bearer tenant-token-3"]);
   });
+
+  it("uses the injected fetch for both auth and calendar requests", async () => {
+    const urls: string[] = [];
+    const fetchImpl: typeof fetch = async (url) => {
+      urls.push(String(url));
+      if (String(url).includes("/tenant_access_token/internal")) {
+        return jsonResponse({ code: 0, tenant_access_token: "tenant-token" });
+      }
+      return jsonResponse({ code: 0, data: { items: [] } });
+    };
+
+    const result = await createLiveFeishuCalendarAdapter({
+      config: {
+        appId: "cli_test",
+        appSecret: "secret-feishu-key",
+        calendarId: "cal_test",
+        timezone: "Asia/Shanghai",
+      },
+      fetch: fetchImpl,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    await result.data.listEvents({ date: "2026-05-09" });
+
+    expect(urls.filter((url) => url.includes("/tenant_access_token/internal")).length).toBe(2);
+    expect(urls.some((url) => url.includes("/open-apis/calendar/v4/calendars/cal_test/events"))).toBe(true);
+  });
 });

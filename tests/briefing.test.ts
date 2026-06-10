@@ -75,6 +75,25 @@ describe("briefing", () => {
     expect(result).toEqual({ ok: true, reply: "晚报｜2026年5月10日 星期日\n明日日程：\n1. 2026年5月10日 星期日 09:00 电话会" });
   });
 
+  it("uses an explicit target date for briefing requests like tomorrow schedule", async () => {
+    const state = createShortTermStateStore();
+    const result = await executeDailyBriefing({
+      briefingType: "morning",
+      date: "2026-06-11",
+      today: "2026-06-10",
+      state,
+      calendar: createCalendar({
+        "2026-06-10": [{ id: "evt_today", title: "今天的会", start: "14:00" }],
+        "2026-06-11": [{ id: "evt_tomorrow", title: "明天的会", start: "14:00" }],
+      }),
+    });
+
+    expect(result).toEqual({ ok: true, reply: "早报｜2026年6月11日 星期四\n日程：\n1. 2026年6月11日 星期四 14:00 明天的会" });
+    expect(state.snapshot().briefing_items).toEqual([
+      { itemNumber: 1, eventId: "evt_tomorrow", title: "明天的会", date: "2026-06-11", startTime: "14:00" },
+    ]);
+  });
+
   it("includes numbered pending todos in daily briefing when a seed store is provided", async () => {
     const result = await executeDailyBriefing({
       briefingType: "morning",

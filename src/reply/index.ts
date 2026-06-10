@@ -17,6 +17,7 @@ export function buildActionReply(action: CalendarAction, result?: CalendarExecut
   }
 
   if (action.type === "create_event") return `已新增日程：\n${formatCalendarEventDetail(result.data)}`;
+  if (action.type === "create_recurring_event") return `已新增重复日程：\n${formatCalendarEventDetail(result.data)}`;
   if (action.type === "update_event") return `已修改日程：\n${formatCalendarEventDetail(result.data)}`;
   return `已处理：${result.data.title}`;
 }

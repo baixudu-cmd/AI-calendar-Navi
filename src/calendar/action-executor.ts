@@ -32,6 +32,8 @@ export async function executeCalendarAction(
   switch (action.type) {
     case "create_event":
       return createEvent(adapter, action.event);
+    case "create_recurring_event":
+      return createEvent(adapter, action.event);
     case "create_events": {
       const created: FeishuCalendarEvent[] = [];
       for (const event of action.events) {
@@ -54,6 +56,8 @@ export async function executeCalendarAction(
       }
 
       return updateEvent(adapter, { eventId: action.target.eventId, patch: action.patch });
+    case "update_and_create_events":
+      return { ok: false, code: "skipped", message: "update_and_create_events 由 API Bridge 按顺序拆成修改和创建。" };
     case "propose_schedule":
       return { ok: false, code: "skipped", message: "propose_schedule 由 API Bridge 生成排程推荐。" };
     case "confirm_schedule":

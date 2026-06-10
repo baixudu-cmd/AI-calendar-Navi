@@ -28,6 +28,7 @@ function createFakeCalendar(): CalendarAdapter {
       if (!event) return { ok: false, code: "not_found", message: "没有找到日程。" };
       if (input.patch.title) event.title = input.patch.title;
       if (input.patch.date && input.patch.startTime) event.start = `${input.patch.date} ${input.patch.startTime}`;
+      if (input.patch.date && input.patch.endTime) event.end = `${input.patch.date} ${input.patch.endTime}`;
       return { ok: true, data: event };
     },
     async deleteEvent(input) {
@@ -727,6 +728,36 @@ describe("handleCalendarAgentRequest", () => {
     expect(result.reply).toContain("整理材料");
   });
 
+  it("keeps broad afternoon intent when auto-scheduling a remembered todo", async () => {
+    const created: string[] = [];
+
+    const result = await handleCalendarAgentRequest({
+      text: "今天下午把杨院1011 model弄好",
+      requestId: "req_auto_schedule_afternoon_todo",
+      now: "2026-06-09T12:12:00+08:00",
+      state: createShortTermStateStore(),
+      decisionClient: decisionClient({
+        type: "remember_todo",
+        title: "把杨院1011 model弄好",
+        autoSchedule: true,
+        date: "2026-06-09",
+        preferredWindow: "afternoon",
+      }),
+      calendar: {
+        ...createFakeCalendar(),
+        async createEvent(event) {
+          created.push(`${event.date} ${event.startTime}`);
+          return { ok: true, data: { id: "evt_afternoon_todo", title: event.title, start: `${event.date} ${event.startTime}` } };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_event" });
+    expect(created).toEqual(["2026-06-09 14:00"]);
+    expect(result.reply).toContain("14:00");
+    expect(result.reply).not.toContain("09:00");
+  });
+
   it("creates an event through the existing calendar action executor", async () => {
     const result = await handleCalendarAgentRequest({
       text: "明天下午三点见张总",
@@ -741,6 +772,188 @@ describe("handleCalendarAgentRequest", () => {
 
     expect(result).toMatchObject({ ok: true, actionType: "create_event", requestId: "req_create" });
     expect(result.reply).toContain("已新增日程");
+  });
+
+  it("creates recurring events without expanding infinite WeChat reminders", async () => {
+    const state = createShortTermStateStore();
+    const reminderStore = createMemoryWechatReminderStore();
+    const calendar: CalendarAdapter = {
+      ...createFakeCalendar(),
+      async createEvent(event) {
+        return {
+          ok: true,
+          data: {
+            id: "evt_recurring",
+            title: event.title,
+            start: `${event.date} ${event.startTime}`,
+            recurrence: "FREQ=DAILY;INTERVAL=1",
+          },
+        };
+      },
+    };
+
+    const result = await handleCalendarAgentRequest({
+      text: "每天上午9点站会",
+      requestId: "req_create_recurring_event",
+      state,
+      decisionClient: decisionClient({
+        type: "create_recurring_event",
+        event: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", interval: 1 },
+        },
+      }),
+      calendar,
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_recurring_event", requestId: "req_create_recurring_event" });
+    expect(result.reply).toContain("已新增重复日程");
+    expect(state.snapshot().last_event).toMatchObject({
+      eventId: "evt_recurring",
+      title: "站会",
+      date: "2026-06-01",
+      startTime: "09:00",
+    });
+    await expect(reminderStore.list()).resolves.toEqual([]);
+  });
+
+  it("turns an inbox recurring reminder into a recurring calendar event and removes it after creation", async () => {
+    const seedStore = createMemorySeedLiteStore([
+      { seedId: "seed_1", title: "每天早上8点吃药", sourceText: "以后每天早上8点提醒我吃药" },
+    ]);
+    const reminderStore = createMemoryWechatReminderStore();
+    let createdEvent: unknown;
+
+    const result = await handleCalendarAgentRequest({
+      text: "把每天早上8点吃药转成日程提醒",
+      requestId: "req_seed_recurring_reminder_to_calendar",
+      state: createShortTermStateStore(),
+      decisionClient: decisionClient({
+        type: "create_recurring_event",
+        event: {
+          title: "吃药",
+          date: "2026-06-11",
+          startTime: "08:00",
+          recurrence: { frequency: "daily", interval: 1 },
+          reminderAtStart: true,
+          sourceIds: ["seed_1"],
+        },
+      }),
+      calendar: {
+        ...createFakeCalendar(),
+        async createEvent(event) {
+          createdEvent = event;
+          return {
+            ok: true,
+            data: {
+              id: "evt_medicine_daily",
+              title: event.title,
+              start: `${event.date} ${event.startTime}`,
+              recurrence: "FREQ=DAILY;INTERVAL=1",
+            },
+          };
+        },
+      },
+      seedStore,
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      actionType: "create_recurring_event",
+      requestId: "req_seed_recurring_reminder_to_calendar",
+    });
+    expect(createdEvent).toEqual({
+      title: "吃药",
+      date: "2026-06-11",
+      startTime: "08:00",
+      recurrence: { frequency: "daily", interval: 1 },
+      reminderAtStart: true,
+      sourceIds: ["seed_1"],
+    });
+    await expect(seedStore.list()).resolves.toEqual([]);
+    await expect(reminderStore.list()).resolves.toEqual([]);
+  });
+
+  it("blocks recurring event creation when the first instance conflicts", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "已有站会", date: "2026-06-01", startTime: "09:00" });
+    let createCalls = 0;
+
+    const result = await handleCalendarAgentRequest({
+      text: "每天上午9点站会",
+      requestId: "req_recurring_conflict",
+      state,
+      decisionClient: decisionClient({
+        type: "create_recurring_event",
+        event: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", interval: 1 },
+        },
+      }),
+      calendar: {
+        ...calendar,
+        createEvent: async (event) => {
+          createCalls += 1;
+          return calendar.createEvent(event);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_conflict", requestId: "req_recurring_conflict" });
+    expect(result.reply).toContain("这个时间已有日程");
+    expect(result.reply).toContain("已有站会");
+    expect(createCalls).toBe(0);
+    expect(state.snapshot().pending_conflict).toEqual({
+      action: {
+        type: "create_recurring_event",
+        event: {
+          title: "站会",
+          date: "2026-06-01",
+          startTime: "09:00",
+          recurrence: { frequency: "daily", interval: 1 },
+        },
+      },
+      conflicts: [{ existingEventId: "evt_1", title: "已有站会", start: "2026-06-01 09:00" }],
+    });
+  });
+
+  it("does not register WeChat reminders after confirming a recurring event conflict", async () => {
+    const state = createShortTermStateStore({
+      pending_conflict: {
+        action: {
+          type: "create_recurring_event",
+          event: {
+            title: "站会",
+            date: "2026-06-01",
+            startTime: "09:00",
+            recurrence: { frequency: "daily", interval: 1 },
+          },
+        },
+        conflicts: [{ existingEventId: "evt_1", title: "已有站会", start: "2026-06-01 09:00" }],
+      },
+    });
+    const reminderStore = createMemoryWechatReminderStore();
+
+    const result = await handleCalendarAgentRequest({
+      text: "确认",
+      requestId: "req_confirm_recurring_conflict",
+      state,
+      decisionClient: decisionClient({ type: "confirm_create", confirmed: true }),
+      calendar: createFakeCalendar(),
+      wechatReminderStore: reminderStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_recurring_event", requestId: "req_confirm_recurring_conflict" });
+    expect(result.reply).toContain("已新增重复日程");
+    expect(state.snapshot().pending_conflict).toBeUndefined();
+    await expect(reminderStore.list()).resolves.toEqual([]);
   });
 
   it("records a memory dream observation after handling a request", async () => {
@@ -2249,6 +2462,73 @@ describe("handleCalendarAgentRequest", () => {
     });
   });
 
+  it("updates an existing meeting before creating another event from the same message", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "跃为-天启 极刻光核项目沟通", date: "2026-06-11", startTime: "14:00", endTime: "15:00" });
+
+    const result = await handleCalendarAgentRequest({
+      text: "2026年6月11日 星期四 14:00 跃为-天启 极刻光核项目沟通 改成上午9:30，然后明天下午两点，互动游戏",
+      requestId: "req_update_meeting_then_create_game",
+      now: "2026-06-10T12:07:00+08:00",
+      timezone: "Asia/Shanghai",
+      state,
+      decisionClient: decisionClient({
+        type: "update_and_create_events",
+        updates: [
+          {
+            target: { kind: "event_query", date: "2026-06-11", startTime: "14:00", title: "天启" },
+            patch: { date: "2026-06-11", startTime: "09:30", endTime: "10:30" },
+          },
+        ],
+        events: [{ title: "互动游戏", date: "2026-06-11", startTime: "14:00" }],
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "update_and_create_events", requestId: "req_update_meeting_then_create_game" });
+    expect(result.reply).toContain("已修改日程");
+    expect(result.reply).toContain("已新增日程");
+    await expect(calendar.listEvents({ date: "2026-06-11" })).resolves.toMatchObject({
+      ok: true,
+      data: [
+        { id: "evt_1", title: "跃为-天启 极刻光核项目沟通", start: "2026-06-11 09:30", end: "2026-06-11 10:30" },
+        { id: "evt_2", title: "互动游戏", start: "2026-06-11 14:00" },
+      ],
+    });
+    expect(state.snapshot().last_event).toMatchObject({ eventId: "evt_2", title: "互动游戏", date: "2026-06-11", startTime: "14:00" });
+  });
+
+  it("matches a structured delete target when the user says a short meeting alias", async () => {
+    const state = createShortTermStateStore();
+    const calendar = createFakeCalendar();
+    await calendar.createEvent({ title: "跃为-天启 极刻光核项目沟通", date: "2026-06-11", startTime: "14:00" });
+    await calendar.createEvent({ title: "互动游戏", date: "2026-06-11", startTime: "14:00" });
+
+    const result = await handleCalendarAgentRequest({
+      text: "把明天下午2点的 天启 会议删掉",
+      requestId: "req_delete_short_alias",
+      now: "2026-06-10T12:30:00+08:00",
+      timezone: "Asia/Shanghai",
+      state,
+      decisionClient: decisionClient({
+        type: "request_delete_event",
+        target: { kind: "event_query", date: "2026-06-11", startTime: "14:00", title: "天启会议" },
+      }),
+      calendar,
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "request_delete_event", requestId: "req_delete_short_alias" });
+    expect(result.reply).toContain("确认删除");
+    expect(result.reply).toContain("跃为-天启 极刻光核项目沟通");
+    expect(state.snapshot().pending_delete).toMatchObject({
+      eventId: "evt_1",
+      title: "跃为-天启 极刻光核项目沟通",
+      date: "2026-06-11",
+      startTime: "14:00",
+    });
+  });
+
   it("locks the third recently displayed created event for deletion", async () => {
     const state = createShortTermStateStore();
     const calendar = createFakeCalendar();
@@ -3374,6 +3654,44 @@ describe("handleCalendarAgentRequest", () => {
       ok: true,
       data: [{ id: "evt_1", title: "问一下肖博，木奇那边聊得怎么样", start: "2026-05-18 16:00" }],
     });
+  });
+
+  it("repairs recurring weekly event start dates from explicit weekdays", async () => {
+    const calendar = createFakeCalendar();
+    let createdEvent: unknown;
+
+    const result = await handleCalendarAgentRequest({
+      text: "每周一上午10点周会",
+      requestId: "req_weekday_recurring_repair",
+      now: "2026-05-08T09:00:00+08:00",
+      timezone: "Asia/Shanghai",
+      state: createShortTermStateStore(),
+      decisionClient: decisionClient({
+        type: "create_recurring_event",
+        event: {
+          title: "周会",
+          date: "2026-05-12",
+          startTime: "10:00",
+          recurrence: { frequency: "weekly", byWeekday: ["MO"] },
+        },
+      }),
+      calendar: {
+        ...calendar,
+        createEvent: async (event) => {
+          createdEvent = event;
+          return calendar.createEvent(event);
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, actionType: "create_recurring_event", requestId: "req_weekday_recurring_repair" });
+    expect(createdEvent).toEqual({
+      title: "周会",
+      date: "2026-05-11",
+      startTime: "10:00",
+      recurrence: { frequency: "weekly", byWeekday: ["MO"] },
+    });
+    expect(result.reply).toContain("2026年5月11日 星期一");
   });
 
   it("repairs batch creation when model dates conflict with explicit weekdays in the user text", async () => {

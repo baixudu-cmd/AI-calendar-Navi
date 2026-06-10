@@ -8,9 +8,15 @@ export type EventDraft = {
   location?: string;
   reminderMinutes?: number | number[];
   reminderAtStart?: boolean;
+  recurrence?: RecurrenceRuleDraft;
   sourceIds?: string[];
   notes?: string;
 };
+
+export type RecurrenceWeekday = "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
+export type RecurrenceRuleDraft =
+  | { frequency: "daily"; interval?: number; count?: number }
+  | { frequency: "weekly"; interval?: number; byWeekday: RecurrenceWeekday[]; count?: number };
 
 export type EventReference =
   | { kind: "last_event"; eventId: string }
@@ -65,6 +71,7 @@ export type SettingsSummaryTopic = "all" | "reminder" | "calendar" | "model" | "
 
 export type CalendarAction =
   | { type: "create_event"; event: EventDraft }
+  | { type: "create_recurring_event"; event: EventDraft & { recurrence: RecurrenceRuleDraft } }
   | { type: "create_events"; events: EventDraft[] }
   | {
       type: "create_and_propose_schedule";
@@ -77,6 +84,7 @@ export type CalendarAction =
     }
   | { type: "list_events"; date?: string; range?: { startDate: string; endDate: string } }
   | { type: "update_event"; target: EventReference; patch: Partial<EventDraft> }
+  | { type: "update_and_create_events"; updates: Array<{ target: EventReference; patch: Partial<EventDraft> }>; events: EventDraft[] }
   | {
       type: "propose_schedule";
       date?: string;
@@ -88,7 +96,7 @@ export type CalendarAction =
       contextRef?: ScheduleContextRef;
     }
   | { type: "confirm_schedule"; confirmed: boolean; optionNumber?: number; itemChanges?: ScheduleItemChange[] }
-  | { type: "remember_todo"; title: string; autoSchedule?: boolean; date?: string }
+  | { type: "remember_todo"; title: string; autoSchedule?: boolean; date?: string; preferredWindow?: SchedulePreferredWindow }
   | { type: "manage_todos"; operation: "list"; limit?: number }
   | { type: "manage_todos"; operation: "list_shelved"; limit?: number }
   | { type: "manage_todos"; operation: "complete" | "delete" | "shelve" | "restore"; target: TodoTarget }
@@ -97,7 +105,7 @@ export type CalendarAction =
   | { type: "request_delete_events"; query: EventQuery }
   | { type: "confirm_delete"; confirmed: boolean; itemNumbers?: number[] }
   | { type: "confirm_create"; confirmed: boolean }
-  | { type: "daily_briefing"; briefingType: "morning" | "evening" }
+  | { type: "daily_briefing"; briefingType: "morning" | "evening"; date?: string }
   | { type: "settings_summary"; topic?: SettingsSummaryTopic }
   | { type: "status_overview" }
   | { type: "dismiss_context" }
@@ -175,6 +183,8 @@ function normalizeInternalCalendarAction(value: Record<string, unknown>): Contra
   switch (value.type) {
     case "create_event":
       return normalizeCreateEvent({ action: "create_event", event: value.event });
+    case "create_recurring_event":
+      return normalizeInternalCreateRecurringEvent(value);
     case "create_events":
       return normalizeCreateEvents(value);
     case "create_and_propose_schedule":
@@ -183,6 +193,8 @@ function normalizeInternalCalendarAction(value: Record<string, unknown>): Contra
       return normalizeListEvents({ action: "list_events", date: value.date, range: value.range });
     case "update_event":
       return normalizeInternalUpdateEvent(value);
+    case "update_and_create_events":
+      return normalizeInternalUpdateAndCreateEvents(value);
     case "propose_schedule":
       return normalizeInternalProposeSchedule(value);
     case "confirm_schedule":
@@ -192,7 +204,7 @@ function normalizeInternalCalendarAction(value: Record<string, unknown>): Contra
     case "manage_todos":
       return normalizeInternalManageTodos(value);
     case "daily_briefing":
-      return normalizeDailyBriefing({ action: "daily_briefing", briefingType: value.briefingType });
+      return normalizeDailyBriefing({ action: "daily_briefing", briefingType: value.briefingType, date: value.date });
     case "settings_summary":
       return normalizeInternalSettingsSummary(value);
     case "status_overview":
@@ -274,6 +286,52 @@ function normalizeCreateEvents(value: Record<string, unknown>): ContractResult {
   return { ok: true, action: { type: "create_events", events } };
 }
 
+function normalizeInternalCreateRecurringEvent(value: Record<string, unknown>): ContractResult {
+  if (!isRecord(value.event)) return clarify(["title", "date", "startTime", "recurrence"]);
+  const normalized = normalizeCreateEvent({ action: "create_event", event: value.event });
+  if (!normalized.ok) return normalized;
+  if (normalized.action.type !== "create_event") return clarify(["title", "date", "startTime"]);
+
+  const recurrence = isRecord(value.event.recurrence) ? normalizeRecurrenceRule(value.event.recurrence) : null;
+  if (!recurrence) return clarify(["recurrence"]);
+
+  return {
+    ok: true,
+    action: {
+      type: "create_recurring_event",
+      event: { ...normalized.action.event, recurrence },
+    },
+  };
+}
+
+function normalizeRecurrenceRule(value: Record<string, unknown>): RecurrenceRuleDraft | null {
+  if ("rrule" in value) return null;
+  if (value.interval !== undefined && (!Number.isInteger(value.interval) || Number(value.interval) <= 0)) return null;
+  if (value.count !== undefined && (!Number.isInteger(value.count) || Number(value.count) <= 0)) return null;
+
+  const common = {
+    ...(Number.isInteger(value.interval) ? { interval: Number(value.interval) } : {}),
+    ...(Number.isInteger(value.count) ? { count: Number(value.count) } : {}),
+  };
+
+  if (value.frequency === "daily") {
+    if (value.byWeekday !== undefined) return null;
+    return { frequency: "daily", ...common };
+  }
+
+  if (value.frequency === "weekly") {
+    if (!Array.isArray(value.byWeekday) || value.byWeekday.length === 0) return null;
+    if (!value.byWeekday.every(isRecurrenceWeekday)) return null;
+    return { frequency: "weekly", ...common, byWeekday: [...new Set(value.byWeekday)] };
+  }
+
+  return null;
+}
+
+function isRecurrenceWeekday(value: unknown): value is RecurrenceWeekday {
+  return value === "MO" || value === "TU" || value === "WE" || value === "TH" || value === "FR" || value === "SA" || value === "SU";
+}
+
 function normalizeInternalCreateAndProposeSchedule(value: Record<string, unknown>): ContractResult {
   if (!Array.isArray(value.events) || value.events.length < 1 || value.events.length > 5) {
     return clarify(["events"]);
@@ -316,6 +374,30 @@ function normalizeInternalUpdateEvent(value: Record<string, unknown>): ContractR
   if (!hasExecutablePatch(patch)) return clarify(["patch"]);
 
   return { ok: true, action: { type: "update_event", target, patch } };
+}
+
+function normalizeInternalUpdateAndCreateEvents(value: Record<string, unknown>): ContractResult {
+  if (!Array.isArray(value.updates) || value.updates.length < 1 || value.updates.length > 5) return clarify(["updates"]);
+  if (!Array.isArray(value.events) || value.events.length < 1 || value.events.length > 5) return clarify(["events"]);
+
+  const updates: Array<{ target: EventReference; patch: Partial<EventDraft> }> = [];
+  for (const update of value.updates) {
+    if (!isRecord(update)) return clarify(["updates"]);
+    const normalized = normalizeInternalUpdateEvent(update);
+    if (!normalized.ok) return normalized;
+    if (normalized.action.type !== "update_event") return clarify(["updates"]);
+    updates.push({ target: normalized.action.target, patch: normalized.action.patch });
+  }
+
+  const events: EventDraft[] = [];
+  for (const event of value.events) {
+    const normalized = normalizeCreateEvent({ action: "create_event", event });
+    if (!normalized.ok) return normalized;
+    if (normalized.action.type !== "create_event") return clarify(["events"]);
+    events.push(normalized.action.event);
+  }
+
+  return { ok: true, action: { type: "update_and_create_events", updates, events } };
 }
 
 function normalizeInternalProposeSchedule(value: Record<string, unknown>): ContractResult {
@@ -371,6 +453,7 @@ function isScheduleContextRef(value: unknown): value is ScheduleContextRef {
 function normalizeInternalRememberTodo(value: Record<string, unknown>): ContractResult {
   if (!isNonEmptyString(value.title)) return clarify(["title"]);
   if (value.date !== undefined && (!isNonEmptyString(value.date) || !isValidDate(value.date))) return clarify(["date"]);
+  if (value.preferredWindow !== undefined && !isSchedulePreferredWindow(value.preferredWindow)) return clarify(["preferredWindow"]);
   return {
     ok: true,
     action: {
@@ -378,6 +461,7 @@ function normalizeInternalRememberTodo(value: Record<string, unknown>): Contract
       title: value.title.trim(),
       autoSchedule: typeof value.autoSchedule === "boolean" ? value.autoSchedule : true,
       ...(isNonEmptyString(value.date) ? { date: value.date } : {}),
+      ...(isSchedulePreferredWindow(value.preferredWindow) ? { preferredWindow: value.preferredWindow } : {}),
     },
   };
 }
@@ -618,8 +702,16 @@ function normalizeDailyBriefing(value: Record<string, unknown>): ContractResult 
   if (value.briefingType !== "morning" && value.briefingType !== "evening") {
     return clarify(["briefingType"]);
   }
+  if (value.date !== undefined && (!isNonEmptyString(value.date) || !isValidDate(value.date))) return clarify(["date"]);
 
-  return { ok: true, action: { type: "daily_briefing", briefingType: value.briefingType } };
+  return {
+    ok: true,
+    action: {
+      type: "daily_briefing",
+      briefingType: value.briefingType,
+      ...(isNonEmptyString(value.date) ? { date: value.date } : {}),
+    },
+  };
 }
 
 function normalizeClarify(value: Record<string, unknown>): ContractResult {

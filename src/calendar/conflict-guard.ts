@@ -35,6 +35,7 @@ export async function detectCreateConflicts(action: CalendarAction, calendar: Ca
 
 function getCreateEvents(action: CalendarAction) {
   if (action.type === "create_event") return [action.event];
+  if (action.type === "create_recurring_event") return [action.event];
   if (action.type === "create_events") return action.events;
   return [];
 }

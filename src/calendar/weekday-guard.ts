@@ -105,6 +105,15 @@ export function normalizeExplicitWeekdayCreateDates(input: {
   }
 
   if (input.action.type === "create_event") return { ok: true, action: { ...input.action, event: repairedEvents[0] } };
+  if (input.action.type === "create_recurring_event") {
+    return {
+      ok: true,
+      action: {
+        ...input.action,
+        event: { ...input.action.event, ...repairedEvents[0], recurrence: input.action.event.recurrence },
+      },
+    };
+  }
   if (input.action.type === "create_events") return { ok: true, action: { ...input.action, events: repairedEvents } };
   return { ok: true, action: input.action };
 }
@@ -112,6 +121,7 @@ export function normalizeExplicitWeekdayCreateDates(input: {
 // 取出创建类动作里的日程草稿。
 function getCreateEvents(action: CalendarAction): EventDraft[] {
   if (action.type === "create_event") return [action.event];
+  if (action.type === "create_recurring_event") return [action.event];
   if (action.type === "create_events") return action.events;
   return [];
 }

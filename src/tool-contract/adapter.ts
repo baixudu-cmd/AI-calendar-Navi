@@ -10,6 +10,8 @@ export function toolCallToCalendarAction(call: AdaptableCalendarToolCall): Calen
   switch (call.toolName) {
     case "calendar.create_event":
       return { type: "create_event", event: call.arguments };
+    case "calendar.create_recurring_event":
+      return { type: "create_recurring_event", event: call.arguments };
     case "calendar.create_reminder":
       return { type: "create_event", event: call.arguments };
     case "calendar.create_events":
@@ -28,6 +30,12 @@ export function toolCallToCalendarAction(call: AdaptableCalendarToolCall): Calen
       return { type: "list_events", ...call.arguments };
     case "calendar.update_event":
       return { type: "update_event", target: toEventReference(call.arguments.target), patch: call.arguments.patch };
+    case "calendar.update_and_create_events":
+      return {
+        type: "update_and_create_events",
+        updates: call.arguments.updates.map((update) => ({ target: toEventReference(update.target), patch: update.patch })),
+        events: call.arguments.events,
+      };
     case "calendar.propose_schedule":
       return {
         type: "propose_schedule",
@@ -52,6 +60,7 @@ export function toolCallToCalendarAction(call: AdaptableCalendarToolCall): Calen
         title: call.arguments.title,
         autoSchedule: call.arguments.autoSchedule !== false,
         ...(call.arguments.date ? { date: call.arguments.date } : {}),
+        ...(call.arguments.preferredWindow ? { preferredWindow: call.arguments.preferredWindow } : {}),
       };
     case "assistant.manage_todos":
       if (call.arguments.operation === "list" || call.arguments.operation === "list_shelved") {
@@ -83,7 +92,7 @@ export function toolCallToCalendarAction(call: AdaptableCalendarToolCall): Calen
     case "calendar.confirm_create":
       return { type: "confirm_create", confirmed: call.arguments.confirmed };
     case "calendar.daily_briefing":
-      return { type: "daily_briefing", briefingType: call.arguments.briefingType };
+      return { type: "daily_briefing", briefingType: call.arguments.briefingType, ...(call.arguments.date ? { date: call.arguments.date } : {}) };
     case "assistant.settings_summary":
       return { type: "settings_summary", ...(call.arguments.topic ? { topic: call.arguments.topic } : {}) };
     case "assistant.status_overview":
